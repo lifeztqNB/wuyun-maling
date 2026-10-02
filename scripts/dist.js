@@ -42,7 +42,23 @@ if (!fs.existsSync(path.join(root, 'build', 'icon.ico'))) {
 
 const cli = path.join(root, 'node_modules', 'electron-builder', 'cli.js');
 
-const r = spawnSync(process.execPath, [cli, ...process.argv.slice(2)], {
+const args = process.argv.slice(2);
+
+// 显式关掉发布。
+//
+// electron-builder 一旦发现自己在 CI 里（runner 会设 CI=true），就会「隐式发布」，
+// 然后因为拿不到 GH_TOKEN 直接失败，报一句
+//   "GitHub Personal Access Token is not set, neither programmatically, nor using env GH_TOKEN"
+// —— 看着像认证配错了，其实我们压根不想让它发布：Release 是
+// .github/workflows/build.yml 里的 softprops/action-gh-release 负责的，
+// 让 electron-builder 也插一手只会互相打架。
+//
+// 用户自己传了 --publish 就尊重用户的。
+if (!args.some((a) => a === '--publish' || a.startsWith('--publish='))) {
+  args.push('--publish', 'never');
+}
+
+const r = spawnSync(process.execPath, [cli, ...args], {
   stdio: 'inherit',
   cwd: root,
   env: process.env,

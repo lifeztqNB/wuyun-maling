@@ -283,7 +283,7 @@ npm run dist:dir      # 只出 dist/win-unpacked，不生成安装包（快，�
 npm run packaged      # 拉起打好的 exe 截两张图，顺便检查 asar 里文件齐不齐
 ```
 
-打包用的是 electron-builder。三个坑已经处理掉了：
+打包用的是 electron-builder。四个坑已经处理掉了：
 
 - **国内下载构建依赖会卡住**。NSIS、winCodeSign、app-builder 默认从 GitHub 拉，
   `scripts/dist.js` 在本地会把它们指向 npmmirror 镜像。
@@ -291,6 +291,11 @@ npm run packaged      # 拉起打好的 exe 截两张图，顺便检查 asar 里
   所以 `scripts/dist.js` 判断到 `CI` 变量时保持官方源。
 - **图标是还原出来的**。`build/icon.ico` 不在仓库里（二进制传不上去），
   `npm run dist` 的 pre 钩子会先从 `assets/icon.ico.b64` 还原它。
+- **CI 里必须显式 `--publish never`**。electron-builder 一发现自己在 CI 里就会
+  自作主张去「发布」，然后因为拿不到 `GH_TOKEN` 失败，报一句
+  `GitHub Personal Access Token is not set` —— 看着像认证配错了，其实是它在做
+  一件我们没让它做的事。`scripts/dist.js` 已经默认加上这个参数，发布交给
+  workflow 里的 action 负责。
 
 > 只生成了安装包、没生成 portable，或者报「缺少 build/icon.ico」时，先跑 `npm run assets`。
 
