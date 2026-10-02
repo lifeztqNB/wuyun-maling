@@ -1,7 +1,7 @@
 {
   "name": "wuyun-maling",
   "productName": "雾韵码灵",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "雾韵码灵 —— 跑在 Windows 本机的 AI 编程助手，能读写文件、执行命令，界面参照 Codex",
   "author": {
     "name": "雾韵社区"

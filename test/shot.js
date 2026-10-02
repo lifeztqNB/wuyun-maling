@@ -11,8 +11,10 @@
  */
 
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
+const zlib = require('zlib');
 
 const { shoot, ROOT } = require('./lib/shoot');
 
@@ -198,12 +200,12 @@ const DEMO_MODELS = [
  * 会真的打到线上，服务端一看是假 token 回 401，客户端会「很正确地」自动登出，
  * 截图就变成登录页了。指向死端口则是一个网络错误，不会触发登出。
  */
-function writeConfig(dir, workspace, { mode = 'custom', loggedIn = false } = {}) {
+function writeConfig(dir, workspace, { mode = 'custom', loggedIn = false, avatarUrl = '' } = {}) {
   const community = {
     token: loggedIn ? 'demo-token-not-real' : '',
     username: loggedIn ? 'wuyun_demo' : '',
     nickname: loggedIn ? '雾韵演示号' : '',
-    avatarUrl: '',
+    avatarUrl,
     siteBaseUrl: 'http://127.0.0.1:9',
     gatewayBaseUrl: 'https://api.wuyunsq.top/v1',
     models: DEMO_MODELS,
@@ -266,6 +268,94 @@ function makeBlankDir(opts) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wuyun-shot-blank-'));
   writeConfig(dir, fs.mkdtempSync(path.join(os.tmpdir(), 'wuyun-shot-ws-')), opts);
   return dir;
+}
+
+/* ---------- 头像验收用的本地图片服务 ---------- */
+
+/**
+ * 生成一张 size×size 的纯色 PNG。
+ *
+ * 自己拼 PNG 而不是放一个二进制测试图进仓库：仓库里塞二进制，diff 看不见、
+ * 改不了、还容易被当成「误提交」。这里只有 20 行，输入输出都是可读的。
+ */
+const CRC_TABLE = (() => {
+  const t = new Int32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c;
+  }
+  return t;
+})();
+
+function crc32(buf) {
+  let c = -1;
+  for (const b of buf) c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >>> 8);
+  return (c ^ -1) >>> 0;
+}
+
+function pngChunk(type, data) {
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length);
+  const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body));
+  return Buffer.concat([len, body, crc]);
+}
+
+function solidPng(size, [r, g, b]) {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0);
+  ihdr.writeUInt32BE(size, 4);
+  ihdr[8] = 8; // 每通道 8 位
+  ihdr[9] = 2; // 真彩色 RGB
+
+  // 每行开头要有一个 filter 字节（0 = None），漏了图就是坏的
+  const stride = 1 + size * 3;
+  const raw = Buffer.alloc(size * stride);
+  for (let y = 0; y < size; y++) {
+    const off = y * stride;
+    for (let x = 0; x < size; x++) {
+      raw[off + 1 + x * 3] = r;
+      raw[off + 2 + x * 3] = g;
+      raw[off + 3 + x * 3] = b;
+    }
+  }
+
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', zlib.deflateSync(raw)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+/**
+ * 起一个只服务头像的小 HTTP 服务。
+ *
+ * 为什么要真的起服务：头像这条路的关键不在「画一个圆」，而在
+ * 「渲染进程的 CSP 不允许加载外链图片，必须由主进程取回来转 data: URL」。
+ * 只有让主进程真的去 fetch 一次，才能证明这条路是通的。
+ */
+function startAvatarServer() {
+  const png = solidPng(64, [0x2f, 0x8f, 0x5a]); // 一块绿 —— 在深色界面上很显眼
+  const server = http.createServer((req, res) => {
+    if (req.url.startsWith('/avatar.png')) {
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': png.length });
+      res.end(png);
+      return;
+    }
+    // 别的路径一律 404，用来验收「头像取不到时要退回首字」
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('not found');
+  });
+
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      resolve({ port, close: () => server.close() });
+    });
+  });
 }
 
 /* ---------- 主流程 ---------- */
@@ -364,6 +454,108 @@ function makeBlankDir(opts) {
       delay: 1700,
     })
   );
+
+  // 9) 输入栏右侧的「模型 / 推理强度」下拉（社区模式 + 已登录）
+  //
+  //    这张图盯的是「登录后模型到底同步上没有」：下拉里必须已经选中服务端
+  //    下发的默认模型（而不是一个空白的「未配置」），否则就是没同步。
+  step('09-composer-selects', () =>
+    shoot({ label: '09-composer-selects', dataDir: freshDir({ mode: 'community', loggedIn: true }),
+      script:
+        "(function(){var m=document.getElementById('selModel'),r=document.getElementById('selReason');" +
+        "return 'model='+m.value+' mopts='+m.options.length+' reason='+JSON.stringify(r.value)+' ropts='+r.options.length})()",
+      delay: 1800,
+    })
+  );
+
+  // 10) 复制：每条消息的复制按钮 + 右键菜单
+  //
+  //    右键菜单是用 MouseEvent 手动派发的 —— Electron 里没有原生右键菜单，
+  //    自动化也点不出系统菜单，只能把事件直接喂给页面，验证菜单真的弹出来了。
+  //    顺便报一下菜单的 top：它必须落在标题栏（拖拽区）下面，否则点它会变成拖窗口。
+  step('10-copy', () =>
+    shoot({ label: '10-copy', dataDir: freshDir(),
+      script:
+        "(function(){var a=document.querySelector('.msg-assistant');var b=a.getBoundingClientRect();" +
+        "a.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:Math.round(b.left)+60,clientY:Math.round(b.top)+12}));" +
+        "var m=document.querySelector('.ctx-menu');var tb=document.querySelector('.titlebar').offsetHeight;" +
+        "return 'copy_btns='+document.querySelectorAll('.msg-copy').length" +
+        "+' menu_items='+document.querySelectorAll('.ctx-menu .ctx-item').length" +
+        "+' user_select='+getComputedStyle(document.querySelector('.transcript')).userSelect" +
+        "+' menu_top='+Math.round(m.getBoundingClientRect().top)+' titlebar_h='+tb})()",
+      delay: 1800,
+    })
+  );
+
+  // 11) 登录成功后登录页必须收起来
+  //
+  //    这是用户实际报过的 bug：登录明明成功了（token 拿到了、额度也下发了），
+  //    登录页却还盖在上面，看起来就像登录失败。这里把「已登录」的状态摆好，
+  //    先手动 showLogin，再走一遍 afterAuthChange，检查它有没有把页面收掉。
+  step('11-login-hides', () =>
+    shoot({ label: '11-login-hides', dataDir: freshDir({ mode: 'community', loggedIn: true }),
+      script:
+        "(async function(){window.__wuyun.showLogin();" +
+        "var before=document.getElementById('loginScreen').hidden;" +
+        "await window.__wuyun.afterAuthChange();" +
+        "var st=window.__wuyun.A.state||{};" +
+        "return 'before_hidden='+before+' after_hidden='+document.getElementById('loginScreen').hidden" +
+        "+' loggedIn='+!!st.loggedIn+' effectiveModel='+st.effectiveModel})()",
+      delay: 1800,
+    })
+  );
+
+  // 12) 社区头像真的同步过来了
+  //
+  //     渲染进程的 CSP 是 `img-src 'self' data: file:`、`connect-src 'none'`，
+  //     所以 `<img src="https://社区域名/...">` 一定是白板。正确做法是主进程
+  //     取回来转成 data: URL 再交给界面 —— 这张图就是验收那条链路。
+  step('12-avatar', async () => {
+    const srv = await startAvatarServer();
+    try {
+      await shoot({
+        label: '12-avatar',
+        dataDir: freshDir({
+          mode: 'community',
+          loggedIn: true,
+          avatarUrl: `http://127.0.0.1:${srv.port}/avatar.png`,
+        }),
+        script:
+          "(async function(){var d=await window.__wuyun.loadAvatar();" +
+          "window.__wuyun.renderAuthChrome();window.__wuyun.openAccount();" +
+          "var side=document.querySelector('#acctAva img'),lg=document.querySelector('.acct-ava-lg img');" +
+          "return 'prefix='+(d?d.slice(0,21):'null')+' side_img='+!!side+' lg_img='+!!lg})()",
+        delay: 2000,
+      });
+    } finally {
+      srv.close();
+    }
+  });
+
+  // 13) 头像取不到时必须退回「首字」，而不是留一个空圆圈
+  step('13-avatar-fallback', async () => {
+    const srv = await startAvatarServer();
+    try {
+      await shoot({
+        label: '13-avatar-fallback',
+        dataDir: freshDir({
+          mode: 'community',
+          loggedIn: true,
+          // 故意指到一个 404 上
+          avatarUrl: `http://127.0.0.1:${srv.port}/missing.png`,
+        }),
+        script:
+          "(async function(){var d=await window.__wuyun.loadAvatar();" +
+          "window.__wuyun.renderAuthChrome();" +
+          "var box=document.getElementById('acctAva');" +
+          "return 'avatar='+(d===null?'null':'unexpected')+' img='+!!box.querySelector('img')" +
+          "+' text='+JSON.stringify(box.textContent)})()",
+        delay: 2000,
+      });
+    } finally {
+      srv.close();
+    }
+  });
 
   for (const s of steps) {
     if (want(s.label)) await s.fn();

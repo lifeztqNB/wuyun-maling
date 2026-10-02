@@ -97,6 +97,10 @@
           </div>
           <div class="cb-right">
             <span class="cb-status" id="statusText"></span>
+            <!-- 模型与推理强度。放在发送键左边，是因为它们和「这一句话怎么发出去」
+                 是同一类决定 —— 发之前顺手就能改，不用为了换个模型去开设置页。 -->
+            <select class="cb-select" id="selModel" title="本次对话用的模型"></select>
+            <select class="cb-select" id="selReason" title="推理强度"></select>
             <button class="send-btn" id="btnSend" title="发送（Enter）">↑</button>
           </div>
         </div>

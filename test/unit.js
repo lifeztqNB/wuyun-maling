@@ -426,6 +426,72 @@ test('delete_path 在任何非 full 模式下都要弹窗', () => {
 });
 
 /* ============================================================
+ * 配置持久化（store）
+ * ============================================================ */
+
+section('配置持久化');
+
+const { Store } = require('../src/store');
+
+function freshStore() {
+  return new Store(fs.mkdtempSync(path.join(os.tmpdir(), 'wuyun-store-')));
+}
+
+test('推理强度只接受白名单里的值，别的（含 undefined）一律当「不传」', () => {
+  const s = freshStore();
+  assert.strictEqual(s.saveConfig({ reasoningEffort: 'high' }).reasoningEffort, 'high');
+  assert.strictEqual(s.saveConfig({ reasoningEffort: '' }).reasoningEffort, '');
+  // 界面万一被改坏、或者配置文件被手改成了别的值，绝不能原样发给上游 ——
+  // 它会被原样写进请求体，等于把一个不受控的字段递给模型端点。
+  assert.strictEqual(s.saveConfig({ reasoningEffort: 'ultra' }).reasoningEffort, '');
+  assert.strictEqual(s.saveConfig({ reasoningEffort: 123 }).reasoningEffort, '');
+  assert.strictEqual(s.saveConfig({ reasoningEffort: null }).reasoningEffort, '');
+});
+
+test('temperature / maxSteps 会被夹到合法区间', () => {
+  const s = freshStore();
+  assert.strictEqual(s.saveConfig({ temperature: 99 }).temperature, 2);
+  assert.strictEqual(s.saveConfig({ temperature: -5 }).temperature, 0);
+  assert.strictEqual(s.saveConfig({ maxSteps: 9999 }).maxSteps, 200);
+  assert.strictEqual(s.saveConfig({ maxSteps: 0 }).maxSteps, 1);
+});
+
+test('未知的键写不进去（前端塞什么都不怕）', () => {
+  const s = freshStore();
+  s.saveConfig({ 想改啥改啥: 'x', __proto__: { polluted: true } });
+  assert.strictEqual(s.getConfig().想改啥改啥, undefined);
+  assert.strictEqual({}.polluted, undefined);
+});
+
+test('老配置里缺 community 的新键时，不会把新键覆盖成 undefined', () => {
+  // 这是升级路上最容易踩的坑：老版本 config.json 里没有 models / defaultModel，
+  // 如果 community 是整体覆盖而不是逐键合并，升级后模型列表就会「莫名其妙地空了」。
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wuyun-store-old-'));
+  fs.writeFileSync(
+    path.join(dir, 'config.json'),
+    JSON.stringify({ mode: 'community', community: { token: 't', username: 'u' } }),
+    'utf8'
+  );
+  const s = new Store(dir);
+  const c = s.getConfig().community;
+  assert.strictEqual(c.token, 't');
+  assert.deepStrictEqual(c.models, [], 'models 应该是空数组而不是 undefined');
+  assert.strictEqual(c.defaultModel, '');
+  assert.ok('quota' in c);
+});
+
+test('退出登录只清登录态，自定义接口的配置原样留着', () => {
+  const s = freshStore();
+  s.saveConfig({ baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-x', model: 'deepseek-chat' });
+  s.saveCommunity({ token: 'tok', username: 'u', nickname: 'n', avatarUrl: 'https://x/y.png' });
+  const after = s.clearCommunityAuth();
+  assert.strictEqual(after.token, '');
+  assert.strictEqual(after.avatarUrl, '');
+  assert.strictEqual(s.getConfig().apiKey, 'sk-x', '自定义接口的 Key 不该被登出清掉');
+  assert.strictEqual(s.getConfig().model, 'deepseek-chat');
+});
+
+/* ============================================================
  * 收尾
  * ============================================================ */
 

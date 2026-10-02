@@ -171,6 +171,7 @@ async function runAgent({
         tools,
         temperature: config.temperature,
         maxTokens: config.maxTokens,
+        reasoningEffort: config.reasoningEffort,
         stream: config.stream !== false,
         extraHeaders: config.extraHeaders,
         signal,

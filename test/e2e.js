@@ -249,6 +249,53 @@ const BASE_CFG = {
     assert.ok(names.includes('edit_file'), names.join(','));
   });
 
+  /* ---------- 推理强度 ---------- */
+
+  console.log('\n\x1b[1m端到端：推理强度（reasoning_effort）\x1b[0m');
+
+  await step('配了推理强度就原样发出去', async () => {
+    const s = [];
+    const { server, port } = await startMock([{ text: '收到' }], s);
+    try {
+      await runAgent({
+        messages: [{ role: 'user', content: '你好' }],
+        config: { ...BASE_CFG, baseUrl: `http://127.0.0.1:${port}`, apiKey: 'k', model: 'mock-small', reasoningEffort: 'high' },
+        workspace: WORKSPACE,
+        approvalMode: 'full',
+        sessionAllowlist: new Set(),
+        onEvent: () => {},
+        requestApproval: async () => true,
+        signal: new AbortController().signal,
+      });
+    } finally {
+      server.close();
+    }
+    assert.strictEqual(s[0].reasoning_effort, 'high', `实际是 ${JSON.stringify(s[0].reasoning_effort)}`);
+  });
+
+  await step('没配（空串）就一个字都不传', async () => {
+    const s = [];
+    const { server, port } = await startMock([{ text: '收到' }], s);
+    try {
+      await runAgent({
+        messages: [{ role: 'user', content: '你好' }],
+        config: { ...BASE_CFG, baseUrl: `http://127.0.0.1:${port}`, apiKey: 'k', model: 'mock-small', reasoningEffort: '' },
+        workspace: WORKSPACE,
+        approvalMode: 'full',
+        sessionAllowlist: new Set(),
+        onEvent: () => {},
+        requestApproval: async () => true,
+        signal: new AbortController().signal,
+      });
+    } finally {
+      server.close();
+    }
+    // 这条断言看着像废话，其实是在守住一个真实的坑：很多端点（本地 vLLM、老模型）
+    // 收到不认识的 reasoning_effort 会直接 400，所以「不选」必须等于「不传」，
+    // 不能传一个空串或者 null 出去。
+    assert.ok(!('reasoning_effort' in s[0]), `不该出现这个字段：${JSON.stringify(s[0].reasoning_effort)}`);
+  });
+
   /* ---------- 危险命令审批 ---------- */
 
   console.log('\n\x1b[1m端到端：危险命令的审批闸门\x1b[0m');

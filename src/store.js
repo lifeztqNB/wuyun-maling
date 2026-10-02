@@ -20,6 +20,22 @@ const DEFAULT_GATEWAY = 'https://api.wuyunsq.top/v1';
 /** 社区站点的接口地址（登录用）。网关是 /v1，站点接口是 /api。 */
 const DEFAULT_SITE = 'https://api.wuyunsq.top';
 
+/**
+ * 允许的推理强度取值。空串排第一，代表「不传这个参数」。
+ *
+ * 这个常量同时被 store（校验）和界面（下拉框）用，所以放这里当唯一事实来源 ——
+ * 两边各写一份列表，早晚会出现「界面能选、保存后被静默丢弃」的怪事。
+ */
+const REASONING_EFFORTS = ['', 'low', 'medium', 'high'];
+
+/** 推理强度的中文标签，界面直接拿去用 */
+const REASONING_LABELS = {
+  '': '默认',
+  low: '低（快）',
+  medium: '中',
+  high: '高（慢但更稳）',
+};
+
 /** 常见服务商的预设，界面上点一下就能填好 base_url */
 const PROVIDER_PRESETS = [
   { id: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
@@ -63,6 +79,14 @@ function defaultConfig(workspace) {
 
     temperature: 0.2,
     maxTokens: 0, // 0 = 不传，交给服务端默认
+    /**
+     * 推理强度（OpenAI 的 reasoning_effort）。
+     *
+     * 空串 = 不传这个参数，完全交给服务端/模型自己的默认行为 —— 这是最安全的默认值：
+     * 只有部分模型（o 系列、gpt-5 系列、社区的 wyzx 系列……）认这个参数，
+     * 对不认的端点传了它，轻则忽略，重则直接 400。所以「不传」才是默认。
+     */
+    reasoningEffort: '',
     maxSteps: 25,
     stream: true,
     shell: process.platform === 'win32' ? 'powershell' : 'bash',
@@ -135,6 +159,7 @@ class Store {
       'model',
       'temperature',
       'maxTokens',
+      'reasoningEffort',
       'maxSteps',
       'stream',
       'shell',
@@ -151,6 +176,11 @@ class Store {
     this.config.temperature = clamp(Number(this.config.temperature), 0, 2, 0.2);
     this.config.maxSteps = clamp(Number.parseInt(this.config.maxSteps, 10), 1, 200, 25);
     this.config.maxTokens = clamp(Number.parseInt(this.config.maxTokens, 10), 0, 200_000, 0);
+    // 白名单校验：只认这几个值，其余（包括 undefined）一律当成「不传」。
+    // 不能让界面塞进来任意字符串 —— 它会被原样写进请求体发给上游。
+    this.config.reasoningEffort = REASONING_EFFORTS.includes(this.config.reasoningEffort)
+      ? this.config.reasoningEffort
+      : '';
     this.config.stream = this.config.stream !== false;
     writeJson(this.configPath, this.config);
     return this.getConfig();
@@ -291,5 +321,7 @@ module.exports = {
   PROVIDER_PRESETS,
   DEFAULT_GATEWAY,
   DEFAULT_SITE,
+  REASONING_EFFORTS,
+  REASONING_LABELS,
   deviceLabel,
 };

@@ -66,7 +66,21 @@ async function describeHttpError(res) {
  * 非流式
  * ============================================================ */
 
-async function chatOnce({ baseUrl, apiKey, model, messages, tools, toolChoice, temperature, maxTokens, extraHeaders, signal }) {
+/**
+ * 把「推理强度」写进请求体。
+ *
+ * 只有非空才写 —— 空串代表「不传」，因为很多端点（尤其是老模型、本地 vLLM）
+ * 收到不认识的 reasoning_effort 会直接 400，而它们本来也不需要这个参数。
+ * 传了就原样透传：网关（api/v1_chat_completions.php）是整包转发的，
+ * 不需要服务端为这个参数做任何改动。
+ */
+function applyReasoning(body, reasoningEffort) {
+  const v = String(reasoningEffort || '').trim();
+  if (v) body.reasoning_effort = v;
+  return body;
+}
+
+async function chatOnce({ baseUrl, apiKey, model, messages, tools, toolChoice, temperature, maxTokens, reasoningEffort, extraHeaders, signal }) {
   const body = { model, messages, stream: false };
   if (tools?.length) {
     body.tools = tools;
@@ -74,6 +88,7 @@ async function chatOnce({ baseUrl, apiKey, model, messages, tools, toolChoice, t
   }
   if (typeof temperature === 'number') body.temperature = temperature;
   if (maxTokens) body.max_tokens = maxTokens;
+  applyReasoning(body, reasoningEffort);
 
   const res = await fetch(endpoint(baseUrl, '/chat/completions'), {
     method: 'POST',
@@ -102,7 +117,7 @@ async function chatOnce({ baseUrl, apiKey, model, messages, tools, toolChoice, t
  * 流式
  * ============================================================ */
 
-async function* chatStream({ baseUrl, apiKey, model, messages, tools, toolChoice, temperature, maxTokens, extraHeaders, signal }) {
+async function* chatStream({ baseUrl, apiKey, model, messages, tools, toolChoice, temperature, maxTokens, reasoningEffort, extraHeaders, signal }) {
   const body = { model, messages, stream: true };
   if (tools?.length) {
     body.tools = tools;
@@ -110,6 +125,7 @@ async function* chatStream({ baseUrl, apiKey, model, messages, tools, toolChoice
   }
   if (typeof temperature === 'number') body.temperature = temperature;
   if (maxTokens) body.max_tokens = maxTokens;
+  applyReasoning(body, reasoningEffort);
   // 有些兼容端点需要显式要 usage
   body.stream_options = { include_usage: true };
 

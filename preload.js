@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld('wuyun', {
   authLogout: () => invoke('auth:logout'),
   authQuota: () => invoke('auth:quota'),
   authModels: () => invoke('auth:models'),
+  /** 社区头像。主进程取回来转成 data: URL（渲染进程的 CSP 不允许直接加载外链图片）。 */
+  authAvatar: () => invoke('auth:avatar'),
 
   /* 会话 */
   listSessions: () => invoke('sessions:list'),

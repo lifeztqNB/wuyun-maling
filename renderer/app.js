@@ -33,8 +33,13 @@ const S = {
  * 两者生命周期不同（账号活在会话之上），混在一起以后想单独重置一个都做不到。
  */
 const A = {
-  state: null, // auth:state 的结果：{mode, loggedIn, user, quota, models, defaultModel, customReady}
+  state: null, // auth:state 的结果：{mode, loggedIn, user, quota, models, defaultModel, effectiveModel, customReady}
   quotaTimer: null,
+  // 头像：渲染进程不能直接加载外链图片（CSP 里 img-src 只有 self/data/file），
+  // 得让主进程取回来转成 data: URL。avatarUrl 用来判断「要不要重新取」——
+  // 换了账号或社区那边改了头像，URL 会变，缓存自然失效。
+  avatarUrl: '',
+  avatar: null, // data: URL；null = 退回「首字」头像
 };
 
 const $ = (id) => document.getElementById(id);
@@ -175,6 +180,44 @@ function firstChar(s) {
   return t ? t.slice(0, 1).toUpperCase() : '灵';
 }
 
+/* ---------- 头像 ---------- */
+
+/**
+ * 取社区头像（data: URL）。
+ *
+ * 结果缓存在 A 上，同一个 URL 不会反复往返主进程；返回 null 就表示「没有头像」，
+ * 界面退回「首字」—— 社区里没设头像的人很多，这条路必须走得通，不能是异常分支。
+ */
+async function loadAvatar() {
+  const url = (A.state && A.state.user && A.state.user.avatarUrl) || '';
+  if (!url) {
+    A.avatarUrl = '';
+    A.avatar = null;
+    return null;
+  }
+  if (A.avatarUrl === url) return A.avatar;
+  A.avatarUrl = url;
+  A.avatar = await api.authAvatar().catch(() => null);
+  return A.avatar;
+}
+
+/** 把头像画进一个圆形节点：有图就画图，没有就写字 */
+function paintAvatar(node, name, dataUrl) {
+  if (!node) return;
+  node.textContent = '';
+  if (dataUrl) {
+    const img = document.createElement('img');
+    img.src = dataUrl;
+    img.alt = '';
+    img.draggable = false;
+    node.appendChild(img);
+    node.classList.add('has-img');
+    return;
+  }
+  node.classList.remove('has-img');
+  node.textContent = firstChar(name);
+}
+
 /** 侧栏账号卡片 + 顶部额度条，两处都靠这个函数刷新 */
 function renderAuthChrome() {
   const st = A.state || {};
@@ -182,7 +225,7 @@ function renderAuthChrome() {
   const name = user.nickname || user.username || '';
   const loggedIn = !!st.loggedIn;
 
-  $('acctAva').textContent = loggedIn ? firstChar(name) : '灵';
+  paintAvatar($('acctAva'), loggedIn ? name : '灵', loggedIn ? A.avatar : null);
   $('acctName').textContent = loggedIn ? name : '未登录';
   $('acctSub').textContent = loggedIn
     ? `社区账号 · ${quotaShort()}`
@@ -191,6 +234,17 @@ function renderAuthChrome() {
       : '点击登录社区账号';
 
   renderQuota();
+
+  // 头像是异步来的：先把「首字」画上去（不阻塞任何东西），图到了再换成图片。
+  if (loggedIn) {
+    loadAvatar().then((dataUrl) => {
+      if (dataUrl) paintAvatar($('acctAva'), name, dataUrl);
+    });
+  } else {
+    // 退出登录后把缓存一起丢掉，免得下一个账号碰巧用同一个地址时画错人
+    A.avatarUrl = '';
+    A.avatar = null;
+  }
 }
 
 function quotaShort() {
@@ -242,10 +296,8 @@ async function refreshQuota({ silent = true } = {}) {
       // 服务端已经不认这个会话了（过期 / 被停用 / 在别处退出登录）。
       // 本地必须跟着登出，否则界面一直显示「已登录」但每个请求都失败，
       // 用户完全看不懂发生了什么。
-      await refreshAuth();
-      renderAuthChrome();
-      renderHeader();
-      showLogin();
+      // afterAuthChange 里已经包含「该不该弹登录页」的判断，不用再手动 showLogin。
+      await afterAuthChange();
       toast('登录状态已失效，请重新登录', true);
     } else if (!silent) {
       toast(`额度刷新失败：${res.message}`, true);
@@ -255,6 +307,7 @@ async function refreshQuota({ silent = true } = {}) {
   await refreshAuth();
   renderAuthChrome();
   renderHeader();
+  renderChannelControls();
 }
 
 /** 每 5 分钟对一次额度：同一账号可能在网页端、另一台电脑上也在用，额度会被别人扣掉。 */
@@ -312,6 +365,8 @@ async function doLogin() {
     await afterAuthChange();
     const who = A.state?.user?.nickname || A.state?.user?.username || '社区账号';
     toast(`已登录：${who} · ${quotaShort()}`);
+    // 登录页已经收起来了，焦点直接落到输入框上 —— 用户下一步就是打字
+    if (!needsLogin()) $('input').focus();
   } catch (err) {
     loginError(err?.message || String(err));
   } finally {
@@ -323,19 +378,34 @@ async function doLogin() {
 /** 跳过登录：切到自定义接口，直接进主界面，把设置打开让人填地址 */
 async function doSkip() {
   S.config = await api.saveConfig({ mode: 'custom' });
-  hideLogin();
+  // 登录页的收起交给 afterAuthChange —— 它按 needsLogin() 判断，
+  // 这里再手动 hideLogin 一次，等于同一件事有两个地方在管，早晚不一致
   await afterAuthChange();
   toast('已跳过登录，请填写你自己的接口地址');
   openSettings();
 }
 
-/** 登录态变了（登录 / 退出 / 跳过）之后统一收尾 */
+/**
+ * 登录态变了（登录 / 退出 / 跳过）之后统一收尾。
+ *
+ * ⚠️ 登录页的显隐【只在这里】决定，调用方不要再自己 show/hide。
+ *
+ * 之前的写法是：登录成功那条分支只做了「清空密码框 + 刷新界面」，唯独忘了
+ * 把登录页收起来 —— 于是出现「明明登录成功了，还停在登录页上」这种看起来
+ * 像登录失败的现象（其实 token 已经拿到、额度也下发了）。
+ * 现在把显隐收进这一个函数，三条路（登录 / 退出 / 跳过）共用同一套判断，
+ * 谁也不会再漏掉这一步。
+ */
 async function afterAuthChange() {
   S.config = await api.getConfig();
   await refreshAuth();
   renderAuthChrome();
   renderHeader();
+  renderChannelControls();
   startQuotaTimer();
+
+  if (needsLogin()) showLogin();
+  else hideLogin();
 }
 
 function bindLogin() {
@@ -456,10 +526,13 @@ function renderHeader() {
   const st = A.state || {};
   $('taskTitle').textContent = S.session?.title || '新任务';
 
-  // 社区模式下模型名由服务端下发（config.model 为空时用服务端默认），
-  // 所以不能只看 config.model，否则登录后这里会一直显示「未配置模型」。
+  // 模型名一律用主进程折算好的 effectiveModel。
+  //
+  // 社区模式下「实际会用的模型」= config.model（用户显式选的，可能是空的）
+  // 落到服务端下发的默认模型上。这个折算只有主进程知道，界面自己拼一份的话，
+  // 就会出现「顶部显示 A、输入栏下拉显示 B、真正请求用的是 C」。
   const modelPill = $('pillModel');
-  const modelName = cfg.model || (st.mode === 'community' ? st.defaultModel : '') || '';
+  const modelName = currentModelName();
   if (modelName) {
     modelPill.textContent = modelName;
     modelPill.classList.remove('warn');
@@ -477,11 +550,87 @@ function renderHeader() {
 
   renderQuota();
   renderUsage();
+  renderChannelControls();
+}
+
+/** 当前实际会用的模型名。主进程给了 effectiveModel 就用它，老版本回退到本地拼。 */
+function currentModelName() {
+  const st = A.state || {};
+  const cfg = S.config || {};
+  if (st.effectiveModel) return st.effectiveModel;
+  return cfg.model || (st.mode === 'community' ? st.defaultModel : '') || '';
 }
 
 function renderUsage() {
   const u = S.usage;
   $('pillUsage').textContent = u && u.total_tokens ? `${u.total_tokens.toLocaleString()} tokens` : '';
+}
+
+/**
+ * 输入栏右侧的两个下拉：模型、推理强度。
+ *
+ * 放在这里而不是只放设置页，是因为这两个参数是「按次」的 —— 写代码要稳、
+ * 随手问一句要快，用户会来回切。塞进设置弹窗意味着每次切都要开弹窗、找、关，
+ * 最后干脆就不切了。
+ */
+function renderChannelControls() {
+  const cfg = S.config || {};
+  const st = A.state || {};
+  const loggedIn = !!st.loggedIn;
+
+  /* ---------- 模型 ---------- */
+  const sel = $('selModel');
+  if (sel) {
+    const cur = currentModelName();
+    const models = Array.isArray(st.models) ? st.models : [];
+    const idOf = (m) => (typeof m === 'string' ? m : m && m.id);
+    const nameOf = (m) => (typeof m === 'string' ? m : (m && (m.name || m.id)) || '');
+
+    sel.textContent = '';
+    if (cfg.mode === 'community' && loggedIn && models.length) {
+      for (const m of models) {
+        const o = document.createElement('option');
+        o.value = idOf(m);
+        o.textContent = nameOf(m) || idOf(m);
+        sel.appendChild(o);
+      }
+      // 用户没显式选过（config.model 为空）时，下拉停在服务端默认那一项上 ——
+      // 显示的是「当前实际在用的模型」。做成一个空白的「跟随默认」选项只会让人
+      // 以为还没配好，那正是「登录了却觉得模型没同步」的来源。
+      sel.value = cur || '';
+      sel.title = `${cur ? `模型：${cur}` : '未配置模型'}\n切换后立刻用于下一轮对话`;
+    } else {
+      // 自定义模式：模型名是用户自己填的一串字，没有列表可拉。
+      // 就放当前这一个选项，能看见「现在用的是哪个」，改则去设置里改。
+      const o = document.createElement('option');
+      o.value = cur || '';
+      o.textContent = cur || '未配置模型';
+      sel.appendChild(o);
+      sel.value = cur || '';
+      sel.title = `${cur ? `模型：${cur}` : '还没有配置模型'}\n自定义接口没有可拉取的列表，点「设置」改`;
+    }
+    sel.disabled = false;
+  }
+
+  /* ---------- 推理强度 ---------- */
+  const rsel = $('selReason');
+  if (rsel) {
+    const cur = cfg.reasoningEffort || '';
+    const list = S.info?.reasoningEfforts || ['', 'low', 'medium', 'high'];
+    const labels = S.info?.reasoningLabels || {};
+    rsel.textContent = '';
+    for (const v of list) {
+      const o = document.createElement('option');
+      o.value = v;
+      o.textContent = `推理·${labels[v] || v || '默认'}`;
+      rsel.appendChild(o);
+    }
+    rsel.value = list.includes(cur) ? cur : '';
+    rsel.title =
+      '推理强度（reasoning_effort）\n' +
+      '「默认」= 不传这个参数，交给模型自己决定。\n' +
+      '只有部分模型认这个参数，选了没反应说明该模型不支持。';
+  }
 }
 
 /**
@@ -577,7 +726,40 @@ function renderItem(item) {
   }
   node.dataset.itemId = item.id;
   S.els.set(item.id, node);
+
+  // 每条对话都挂一个「复制」按钮（鼠标移上去才出现）。
+  //
+  // 光靠「选中 + Ctrl+C」不够用：气泡在流式输出时会整块被替换（updateItem），
+  // 用户刚拖选的那一段会被打断，选了个寂寞。给一个点一下就好的按钮，
+  // 是唯一不依赖选区存活时间的做法。
+  if (item.type === 'user' || item.type === 'assistant') {
+    node.appendChild(buildCopyBtn(() => item.text || '', '复制这条消息'));
+  }
   return node;
+}
+
+/** 小复制按钮。getText 每次点击时才取，这样流式更新过的内容也拿得到最新值。 */
+function buildCopyBtn(getText, title) {
+  const b = el('button', 'msg-copy', '复制');
+  b.type = 'button';
+  b.title = title || '复制';
+  b.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const text = getText();
+    if (!text) {
+      toast('这条没有可复制的文本', true);
+      return;
+    }
+    const ok = await copyText(text);
+    b.textContent = ok ? '已复制' : '复制失败';
+    b.classList.toggle('bad', !ok);
+    if (!ok) toast('复制失败，可以选中后按 Ctrl+C', true);
+    setTimeout(() => {
+      b.textContent = '复制';
+      b.classList.remove('bad');
+    }, 1200);
+  });
+  return b;
 }
 
 function renderAssistant(item) {
@@ -1008,6 +1190,201 @@ async function stop() {
 }
 
 /* ============================================================
+ * 复制与右键菜单
+ * ============================================================ */
+
+/**
+ * 把整段对话拼成纯文本。
+ *
+ * 用途是「报 bug 时把上下文整个贴过去」—— 逐条复制太慢了。
+ * 工具调用也带上（名字 + 参数 + 输出），因为出问题时最该看的就是那一段。
+ */
+function transcriptText() {
+  const items = S.session?.items || [];
+  const out = [];
+  for (const it of items) {
+    if (it.type === 'user') out.push(`【我】\n${it.text || ''}`);
+    else if (it.type === 'assistant') out.push(`【码灵】\n${it.text || ''}`);
+    else if (it.type === 'notice') out.push(`【提示】${it.text || ''}`);
+    else if (it.type === 'tool') {
+      const args = it.args ? JSON.stringify(it.args) : '';
+      out.push(`【工具】${it.name || ''} ${args}\n${it.content || ''}`);
+    }
+  }
+  return out.join('\n\n');
+}
+
+/** 当前选中的文字（没有就返回空串） */
+function selectionText() {
+  const sel = window.getSelection();
+  return sel ? String(sel).trim() : '';
+}
+
+let ctxEl = null;
+
+function closeCtxMenu() {
+  if (ctxEl) {
+    ctxEl.remove();
+    ctxEl = null;
+  }
+}
+
+/**
+ * 弹一个自绘的右键菜单。
+ *
+ * Electron 里网页默认【没有】右键菜单（不是被禁用，是压根没有），所以
+ * 「右键复制」这条所有桌面软件都有的路在这儿是断的。这里自己补上：
+ * entries 里每项 {label, run, disabled}，或者 {sep:true} 画一条分隔线。
+ */
+function openCtxMenu(x, y, entries) {
+  closeCtxMenu();
+  const menu = el('div', 'ctx-menu');
+  for (const e of entries) {
+    if (!e) continue;
+    if (e.sep) {
+      menu.appendChild(el('div', 'ctx-sep'));
+      continue;
+    }
+    const b = el('button', 'ctx-item', e.label);
+    b.type = 'button';
+    if (e.disabled) b.disabled = true;
+    b.addEventListener('click', async () => {
+      closeCtxMenu();
+      try {
+        await e.run();
+      } catch (err) {
+        toast(`操作失败：${err?.message || String(err)}`, true);
+      }
+    });
+    menu.appendChild(b);
+  }
+  if (!menu.children.length) return;
+
+  // 先挂上去量尺寸，再往窗口里收 —— 不然贴着右/下边缘弹会有一半跑到窗口外。
+  //
+  // 上边界不是 0 而是标题栏高度：标题栏那条是拖拽区，把菜单弹在上面，点它
+  // 会变成拖窗口（拖拽区吞鼠标事件，跟 z-index 无关）。宁可让菜单往下挪一点，
+  // 也不能让它出现在一个「看得见、点不动」的地方。
+  menu.style.left = '-9999px';
+  menu.style.top = '0px';
+  document.body.appendChild(menu);
+  const r = menu.getBoundingClientRect();
+  // 标题栏高度从 CSS 变量里读，别硬编码 —— 改标题栏高度时这里不会跟着忘
+  const tbH =
+    Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tb-h')) || 40;
+  const topLimit = tbH + 4;
+  menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - r.width - 4))}px`;
+  menu.style.top = `${Math.max(topLimit, Math.min(y, window.innerHeight - r.height - 4))}px`;
+  ctxEl = menu;
+}
+
+/** 右键对话区：复制选中 / 复制这一条 / 复制整段对话 */
+function bindTranscriptMenu() {
+  on('transcript', 'contextmenu', (e) => {
+    const picked = selectionText();
+    const itemNode = e.target.closest?.('[data-item-id]');
+    const item = itemNode ? (S.session?.items || []).find((i) => i.id === itemNode.dataset.itemId) : null;
+
+    e.preventDefault();
+    openCtxMenu(e.clientX, e.clientY, [
+      {
+        label: '复制选中文字',
+        disabled: !picked,
+        run: async () => {
+          const ok = await copyText(picked);
+          toast(ok ? '已复制选中文字' : '复制失败，试试按 Ctrl+C', !ok);
+        },
+      },
+      item && (item.type === 'user' || item.type === 'assistant')
+        ? {
+            label: item.type === 'user' ? '复制我的这条消息' : '复制码灵的这条回复',
+            run: async () => {
+              const ok = await copyText(item.text || '');
+              toast(ok ? '已复制' : '复制失败', !ok);
+            },
+          }
+        : null,
+      { sep: true },
+      {
+        label: '复制整段对话',
+        disabled: !(S.session?.items || []).length,
+        run: async () => {
+          const ok = await copyText(transcriptText());
+          toast(ok ? '已复制整段对话' : '复制失败', !ok);
+        },
+      },
+    ]);
+  });
+}
+
+/**
+ * 右键输入框：剪切 / 复制 / 粘贴 / 全选。
+ *
+ * 粘贴没法用 execCommand（Chromium 早就禁了），只能走 clipboard.readText()。
+ * 它在 file:// 下有可能被拒 —— 那就明说「按 Ctrl+V」，别让人对着一个点了没反应的
+ * 菜单项发呆。
+ */
+function bindInputMenu() {
+  document.addEventListener('contextmenu', async (e) => {
+    const node = e.target;
+    if (!(node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement)) return;
+    e.preventDefault();
+
+    const start = node.selectionStart ?? 0;
+    const end = node.selectionEnd ?? 0;
+    const selected = node.value.slice(start, end);
+
+    const replaceSelection = (text) => {
+      node.setRangeText(text, start, end, 'end');
+      node.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+
+    openCtxMenu(e.clientX, e.clientY, [
+      {
+        label: '剪切',
+        disabled: !selected || node.readOnly || node.disabled,
+        run: async () => {
+          if (await copyText(selected)) {
+            replaceSelection('');
+            toast('已剪切');
+          } else toast('剪切失败', true);
+        },
+      },
+      {
+        label: '复制',
+        disabled: !selected,
+        run: async () => {
+          const ok = await copyText(selected);
+          toast(ok ? '已复制' : '复制失败', !ok);
+        },
+      },
+      {
+        label: '粘贴',
+        disabled: node.readOnly || node.disabled,
+        run: async () => {
+          try {
+            const text = await navigator.clipboard.readText();
+            if (!text) return toast('剪贴板是空的', true);
+            replaceSelection(text);
+            toast('已粘贴');
+          } catch {
+            toast('粘贴需要按 Ctrl+V（浏览器不允许界面直接读剪贴板）', true);
+          }
+        },
+      },
+      { sep: true },
+      {
+        label: '全选',
+        run: async () => {
+          node.focus();
+          node.setSelectionRange(0, node.value.length);
+        },
+      },
+    ]);
+  });
+}
+
+/* ============================================================
  * 输入框
  * ============================================================ */
 
@@ -1028,6 +1405,22 @@ function bindComposer() {
   });
   on('btnSend', 'click', send);
   on('chipStop', 'click', stop);
+
+  /* —— 模型 / 推理强度：改完立刻生效，不用重启也不用进设置页 —— */
+
+  on('selModel', 'change', async (e) => {
+    const v = e.target.value;
+    S.config = await api.saveConfig({ model: v });
+    renderHeader();
+    toast(v ? `模型：${v}` : '已跟随社区默认模型');
+  });
+
+  on('selReason', 'change', async (e) => {
+    const v = e.target.value;
+    S.config = await api.saveConfig({ reasoningEffort: v });
+    renderChannelControls();
+    toast(`推理强度：${S.info?.reasoningLabels?.[v] || v || '默认'}`);
+  });
 
   on('transcript', 'scroll', () => {
     const box = $('transcript');
@@ -1368,6 +1761,28 @@ function openSettings() {
   row.appendChild(captioned('最大步数', steps));
   body.appendChild(field('生成参数', row, '温度越低越稳定。最大步数限制一次任务里最多调用多少轮工具。'));
 
+  /* —— 推理强度 —— */
+  // 输入栏旁边也有一个，两处共用同一份取值列表（由主进程下发），
+  // 免得出现「设置里能选、保存后被静默丢弃」这种对不上的情况。
+  const reasonSel = document.createElement('select');
+  const effortList = S.info?.reasoningEfforts || ['', 'low', 'medium', 'high'];
+  const effortLabels = S.info?.reasoningLabels || {};
+  for (const v of effortList) {
+    const o = document.createElement('option');
+    o.value = v;
+    o.textContent = `${effortLabels[v] || v || '默认'}${v ? `（${v}）` : ''}`;
+    if ((cfg.reasoningEffort || '') === v) o.selected = true;
+    reasonSel.appendChild(o);
+  }
+  body.appendChild(
+    field(
+      '推理强度',
+      reasonSel,
+      '对应接口的 reasoning_effort 参数。「默认」= 不传，交给模型自己决定 —— ' +
+        '只有部分模型（o 系列、gpt-5 系列等）认这个参数，不认的会忽略它。'
+    )
+  );
+
   /* —— 流式 —— */
   const streamWrap = el('label', 'switch');
   const streamCb = document.createElement('input');
@@ -1440,6 +1855,7 @@ function openSettings() {
       ...collectChannel(),
       temperature: Number(temp.value),
       maxSteps: Number(steps.value),
+      reasoningEffort: reasonSel.value,
       stream: streamCb.checked,
       shell: shellSel.value,
       approvalMode: pickedMode,
@@ -1507,7 +1923,15 @@ function openAccount() {
 
   /* —— 头部 —— */
   const head = el('div', 'acct-head');
-  head.appendChild(el('div', 'acct-ava-lg', loggedIn ? firstChar(name) : '灵'));
+  const ava = el('div', 'acct-ava-lg');
+  paintAvatar(ava, loggedIn ? name : '灵', loggedIn ? A.avatar : null);
+  head.appendChild(ava);
+  if (loggedIn) {
+    // 大号头像同样等图到了再换。弹窗可能先被关掉，所以这里要判节点还在不在
+    loadAvatar().then((dataUrl) => {
+      if (dataUrl && ava.isConnected) paintAvatar(ava, name, dataUrl);
+    });
+  }
   const ht = el('div', 'acct-head-txt');
   ht.appendChild(el('b', null, loggedIn ? name : '未登录'));
   ht.appendChild(
@@ -1570,8 +1994,9 @@ function openAccount() {
       out.disabled = true;
       await api.authLogout();
       closeModal();
+      // 退出后 config.mode 仍是 community 且没有 token，afterAuthChange
+      // 会自己把登录页弹回来，不需要再 showLogin 一次
       await afterAuthChange();
-      showLogin();
       toast('已退出登录');
     });
 
@@ -1655,6 +2080,10 @@ async function boot() {
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      if (ctxEl) {
+        closeCtxMenu();
+        return;
+      }
       // 登录页不给 Esc 关掉：关掉之后是一个「什么都没配好」的主界面，
       // 用户会以为程序坏了。要走就走「跳过登录」那条明路。
       if (!$('loginScreen').hidden) return;
@@ -1663,8 +2092,18 @@ async function boot() {
     }
   });
 
+  // 右键菜单是浮层，任何「别处的动作」都该让它消失 —— 否则它会一直挂在那儿，
+  // 挡着底下的内容，用户还以为界面卡住了。
+  document.addEventListener('click', closeCtxMenu);
+  document.addEventListener('contextmenu', closeCtxMenu, true);
+  window.addEventListener('blur', closeCtxMenu);
+  window.addEventListener('resize', closeCtxMenu);
+  on('transcript', 'scroll', closeCtxMenu);
+
   bindComposer();
   bindLogin();
+  bindTranscriptMenu();
+  bindInputMenu();
 
   api.onMenu((action) => {
     if (action === 'new-task') newTask();
@@ -1718,8 +2157,13 @@ window.__wuyun = {
   renderAll,
   renderAuthChrome,
   renderHeader,
+  renderChannelControls,
   refreshAuth,
   refreshQuota,
+  loadAvatar,
+  transcriptText,
+  copyText,
+  afterAuthChange,
   toast,
   MD,
 };

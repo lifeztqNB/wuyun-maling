@@ -12,10 +12,11 @@
  */
 
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme } = require('electron');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
-const { Store, PROVIDER_PRESETS, DEFAULT_GATEWAY, deviceLabel } = require('./src/store');
+const { Store, PROVIDER_PRESETS, DEFAULT_GATEWAY, REASONING_EFFORTS, REASONING_LABELS, deviceLabel } = require('./src/store');
 const safety = require('./src/safety');
 const { runAgent, buildSystemPrompt } = require('./src/agent');
 const { listModels } = require('./src/llm');
@@ -354,6 +355,37 @@ function buildApprovalRequester(sessionId) {
 }
 
 /**
+ * 社区下发的模型列表 → 纯 id 数组。
+ *
+ * 服务端下发的是 [{id, name, desc}]，但老版本 / 其它实现可能只给字符串数组，
+ * 所以两种都认。过滤掉空值，否则空 id 会污染「认不认这个名字」的判断。
+ */
+function communityModelIds(community) {
+  return ((community && community.models) || [])
+    .map((m) => (typeof m === 'string' ? m : m && m.id))
+    .filter(Boolean);
+}
+
+/**
+ * 当前【实际会用】的模型名。整个应用只有这一处说了算。
+ *
+ * 为什么需要它：config.model 是两种模式共用的一个字段，它的语义是「用户显式选过的
+ * 那个名字」。社区模式下它可能是空的（用户没选过 / 选了「跟随社区默认」），也可能
+ * 是以前在自定义模式下填的 deepseek-chat（社区不认）。这两种情况实际都会落到服务端
+ * 下发的默认模型上 —— 但如果界面各处各算各的，就会出现「顶部显示 A、设置里显示 B、
+ * 真正请求用的是 C」这种对不上的情况。
+ */
+function effectiveModel(config) {
+  if (config.mode === 'community') {
+    const c = config.community || {};
+    const known = communityModelIds(c);
+    if (config.model && known.includes(config.model)) return config.model;
+    return c.defaultModel || known[0] || '';
+  }
+  return config.model || '';
+}
+
+/**
  * 把「界面上的配置」折算成「真正要连的那个端点」。
  *
  * 两种模式的差别只集中在 baseUrl / apiKey / model 这三个字段，
@@ -366,17 +398,10 @@ function buildApprovalRequester(sessionId) {
 function resolveConnection(config) {
   if (config.mode === 'community') {
     const c = config.community || {};
-    // 只有「确实是社区下发的模型名」才认。
-    //
-    // 不能直接拿 config.model 用：它是两种模式共用的一个字段，用户以前在
-    // 自定义模式下填过 deepseek-chat，登录社区后这个值还在，直接透传过去
-    // 会被网关判成「模型不存在」——而用户看到的只是一个莫名其妙的报错。
-    const known = (c.models || []).map((m) => (typeof m === 'string' ? m : m && m.id)).filter(Boolean);
-    const picked = config.model && known.includes(config.model) ? config.model : '';
     return {
       baseUrl: c.gatewayBaseUrl || DEFAULT_GATEWAY,
       apiKey: c.token || '',
-      model: picked || c.defaultModel || '',
+      model: effectiveModel(config),
       channel: 'community',
       ready: !!c.token,
     };
@@ -604,6 +629,63 @@ async function runSession(session, { userText } = {}) {
 }
 
 /* ============================================================
+ * 社区头像
+ * ============================================================ */
+
+/** 头像大小上限。头像是几 KB 的小图，超过这个数说明地址不对，直接放弃。 */
+const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
+
+function avatarCacheDir() {
+  return path.join(app.getPath('userData'), 'avatar-cache');
+}
+
+/**
+ * 把社区头像取回本地并转成 data: URL。
+ *
+ * 为什么非要多这一道：渲染进程的 CSP 是 `connect-src 'none'`、`img-src 'self' data: file:`，
+ * 直接写 `<img src="https://社区域名/...">` 会被 CSP 拦掉，图是空白的（而且控制台
+ * 里的报错很难联想到「头像」）。让主进程去取、转成 data: 再交给界面，既绕开了 CSP，
+ * 也不用为了一个头像去放宽整个渲染进程的图片策略。
+ *
+ * 结果按 URL 哈希缓存在本地：头像不常变，每次启动都重新下载没有意义，
+ * 也顺带避免了「每开一次客户端就向社区暴露一次在线」。
+ */
+async function fetchAvatarDataUrl(url) {
+  const u = String(url || '').trim();
+  // 只认 http(s)。file: / data: 之类一律不取 —— 社区下发的字段不可全信。
+  if (!/^https?:\/\//i.test(u)) return null;
+
+  const file = path.join(avatarCacheDir(), `${crypto.createHash('sha1').update(u).digest('hex')}.txt`);
+  try {
+    const cached = fs.readFileSync(file, 'utf8');
+    if (cached.startsWith('data:image/')) return cached;
+  } catch {
+    /* 首次运行还没有缓存 */
+  }
+
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 8000);
+  try {
+    const res = await fetch(u, { signal: ctl.signal, redirect: 'follow' });
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (!buf.length || buf.length > AVATAR_MAX_BYTES) return null;
+    const mime = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    if (!/^image\//.test(mime)) return null;
+    const dataUrl = `data:${mime};base64,${buf.toString('base64')}`;
+    fs.mkdirSync(avatarCacheDir(), { recursive: true });
+    fs.writeFileSync(file, dataUrl, 'utf8');
+    return dataUrl;
+  } catch {
+    // 网络不通 / 超时 / 图片坏了：返回 null，界面退回「首字」头像。
+    // 头像拿不到不该影响任何正常功能，所以这里绝不抛。
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* ============================================================
  * IPC
  * ============================================================ */
 
@@ -623,6 +705,10 @@ function registerIpc() {
     presets: PROVIDER_PRESETS,
     modes: safety.MODES,
     modeLabels: safety.MODE_LABELS,
+    // 推理强度的可选项与中文标签。界面不该自己硬编码一份列表 ——
+    // 否则 store 那边改了取值，界面还能选出被静默丢弃的选项。
+    reasoningEfforts: REASONING_EFFORTS,
+    reasoningLabels: REASONING_LABELS,
   }));
 
   ipcMain.handle('presets:get', () => PROVIDER_PRESETS);
@@ -652,9 +738,21 @@ function registerIpc() {
       gatewayBaseUrl: c.gatewayBaseUrl,
       models: c.models,
       defaultModel: c.defaultModel,
+      // 当前实际会用哪个模型（含「config.model 为空 → 落到服务端默认」这层折算）。
+      // 界面顶部那个模型标签、输入栏旁边的模型下拉，都该显示这个值 —— 它们显示的
+      // 必须是「真正会被发出去的模型名」，不能是「用户上次填过什么」。
+      effectiveModel: effectiveModel(config),
+      reasoningEffort: config.reasoningEffort || '',
       // 自定义模式下的配置情况，界面用它决定「跳过登录」后要不要提示去填
       customReady: !!(config.baseUrl && config.model),
     };
+  });
+
+  /** 社区头像（转成 data: URL 交给界面，原因见 fetchAvatarDataUrl 的注释） */
+  ipcMain.handle('auth:avatar', async () => {
+    const c = store.getCommunity();
+    if (!c.token || !c.avatarUrl) return null;
+    return fetchAvatarDataUrl(c.avatarUrl);
   });
 
   ipcMain.handle('auth:login', async (_e, payload) => {
@@ -687,14 +785,20 @@ function registerIpc() {
         quotaFetchedAt: Date.now(),
       });
 
-      // config.model 是两种模式共用的一个字段。以前在自定义模式下填过
-      // deepseek-chat 之类名字的话，登录社区后它会留着，然后设置页里就显示成
-      // 「社区不认这个名字」——虽然不会真的出错（resolveConnection 会兜底），
-      // 但让人一上来就看见一个报错一样的选项，体验很糟。这里直接清掉，
-      // 让它跟随社区下发的默认模型。
-      const known = (res.gateway.models || []).map((m) => (typeof m === 'string' ? m : m && m.id));
+      // 登录即把模型同步下来，别让用户再自己去设置里挑一遍。
+      //
+      // config.model 是两种模式共用的一个字段，登录这一刻它只有两种可能：
+      //   · 空（第一次用）—— 以前会一直空着，顶部就显示成「未配置模型」，
+      //     看起来像「登录了但没配好」，用户只好自己跑去设置里填一个。
+      //   · 以前在自定义模式下填过的名字（比如 deepseek-chat）—— 社区不认，
+      //     留着会让设置页出现一个像报错一样的选项。
+      // 两种情况都统一落到服务端下发的默认模型上。用户之后想在设置里换，随时能换。
+      const known = communityModelIds({ models: res.gateway.models });
+      const fallback = res.gateway.defaultModel || known[0] || '';
       const patch = { mode: 'community' };
-      if (config.model && !known.includes(config.model)) patch.model = '';
+      if (!config.model || !known.includes(config.model)) {
+        if (fallback) patch.model = fallback;
+      }
 
       // 登录后自动切到社区模式：用户点了「登录」就是想用社区通道
       store.saveConfig(patch);

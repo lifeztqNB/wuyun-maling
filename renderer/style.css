@@ -239,9 +239,8 @@ button:disabled { cursor: default; }
 }
 .side-foot-row { display: flex; gap: 6px; }
 
-/* 账号入口。头像用「首字母」而不是远程图片：
-   加载远程头像等于让社区服务器知道「谁在什么时候打开了客户端」，
-   而且渲染进程的 CSP 也不允许发外部请求。 */
+/* 账号入口。头像是社区头像（主进程取回来转成 data: URL，见 main.js 的
+   fetchAvatarDataUrl），没设头像或取不到时退回「首字」。 */
 .side-acct {
   display: flex; align-items: center; gap: 9px;
   width: 100%;
@@ -259,7 +258,10 @@ button:disabled { cursor: default; }
   background: linear-gradient(150deg, #a63c2a, #6f2519);
   color: #f6ede2;
   font-size: 12px; font-weight: 700;
+  overflow: hidden;
 }
+.acct-ava.has-img { background: #26262b; }
+.acct-ava > img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .acct-txt { min-width: 0; display: flex; flex-direction: column; }
 .acct-name {
   font-size: 12.5px; color: var(--fg);
@@ -360,6 +362,17 @@ button.pill:hover { background: var(--bg-elev2); color: var(--fg); }
 }
 .stream { max-width: 820px; margin: 0 auto; padding: 0 26px; display: flex; flex-direction: column; gap: 16px; }
 
+/* 对话内容必须能选中、能复制。
+   标题栏那几处 user-select: none 是为了拖窗口时别选中文字，但它们的作用范围
+   只该在标题栏里 —— 这里显式把对话区打回 text，免得哪天有人把规则写到更外层
+   去（那样整个界面就变成「看着能选，实际选不动」）。 */
+.transcript,
+.transcript * {
+  -webkit-user-select: text;
+  user-select: text;
+}
+.transcript { cursor: auto; }
+
 .msg-user {
   align-self: flex-end;
   max-width: 78%;
@@ -369,9 +382,62 @@ button.pill:hover { background: var(--bg-elev2); color: var(--fg); }
   border: 1px solid #26262b;
   white-space: pre-wrap;
   word-break: break-word;
+  position: relative;
 }
 
-.msg-assistant { align-self: stretch; }
+.msg-assistant { align-self: stretch; position: relative; }
+
+/* 每条消息的「复制」按钮：鼠标移上去才出现，平时不占视觉。
+   位置在气泡右上角外侧一点，压不到正文。 */
+.msg-copy {
+  position: absolute;
+  top: -4px;
+  right: -2px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg-elev);
+  color: var(--fg-dim);
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity .12s, background .12s, color .12s;
+}
+.msg-user .msg-copy { right: 6px; }
+.msg-user:hover .msg-copy,
+.msg-assistant:hover .msg-copy,
+.msg-copy:focus-visible { opacity: 1; }
+.msg-copy:hover { background: var(--bg-elev2); color: var(--fg); }
+.msg-copy.bad { color: var(--err); border-color: rgba(248,81,73,.4); }
+
+/* ---------- 右键菜单 ---------- */
+
+.ctx-menu {
+  position: fixed;
+  z-index: 300;
+  min-width: 150px;
+  padding: 4px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--bg-elev);
+  box-shadow: 0 10px 30px rgba(0,0,0,.5);
+  /* 标题栏那一整条是拖拽区（-webkit-app-region: drag），而拖拽区会吞掉鼠标事件，
+     跟 z-index 无关。菜单万一弹到那一条上，点它就会变成拖窗口 —— 显式声明
+     no-drag，把这块区域从拖拽区里挖出来。 */
+  -webkit-app-region: no-drag;
+}
+.ctx-item {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: 6px;
+  text-align: left;
+  color: var(--fg-mut);
+  font-size: 12.5px;
+}
+.ctx-item:hover:not(:disabled) { background: var(--bg-elev2); color: var(--fg); }
+.ctx-item:disabled { color: var(--fg-faint); cursor: default; }
+.ctx-sep { height: 1px; margin: 4px 6px; background: var(--line-soft); }
+
 .msg-assistant .reasoning {
   margin-bottom: 8px;
   border-left: 2px solid #2a2a30;
@@ -587,6 +653,27 @@ pre.term .p-ok  { color: #7ee08a; }
 .cb-chip-ghost:hover { background: rgba(248,81,73,.12); }
 
 .cb-status { font-family: var(--mono); font-size: 11px; color: var(--fg-faint); }
+
+/* 输入栏里的「模型 / 推理强度」下拉。
+   做成极简的胶囊：和左边的 cb-chip 同一套视觉，不抢输入框的注意力。
+   max-width + 省略号是为了窄窗口时别把发送键挤出去。 */
+.cb-select {
+  max-width: 168px;
+  padding: 3px 6px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.cb-select:hover { background: var(--bg-elev2); color: var(--fg); border-color: var(--line); }
+.cb-select:focus { outline: none; border-color: var(--accent); color: var(--fg); }
+.cb-select option { background: var(--bg-elev); color: var(--fg); }
+#selReason { max-width: 108px; }
 
 .send-btn {
   width: 28px; height: 28px;
@@ -892,7 +979,10 @@ pre.term .p-ok  { color: #7ee08a; }
   display: grid; place-items: center;
   background: linear-gradient(150deg, #a63c2a, #6f2519);
   color: #f6ede2; font-size: 19px; font-weight: 700;
+  overflow: hidden;
 }
+.acct-ava-lg.has-img { background: #26262b; }
+.acct-ava-lg > img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .acct-head-txt { min-width: 0; }
 .acct-head-txt b { display: block; font-size: 15px; font-weight: 600; }
 .acct-head-txt span { font-size: 12px; color: var(--fg-dim); }
