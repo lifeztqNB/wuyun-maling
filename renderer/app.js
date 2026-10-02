@@ -573,6 +573,10 @@ function renderUsage() {
  * 随手问一句要快，用户会来回切。塞进设置弹窗意味着每次切都要开弹窗、找、关，
  * 最后干脆就不切了。
  */
+
+/** 模型下拉里「去设置里换」那一项的哨兵值。真实模型名不可能长这样。 */
+const SETTINGS_OPTION = '__open_settings__';
+
 function renderChannelControls() {
   const cfg = S.config || {};
   const st = A.state || {};
@@ -601,13 +605,18 @@ function renderChannelControls() {
       sel.title = `${cur ? `模型：${cur}` : '未配置模型'}\n切换后立刻用于下一轮对话`;
     } else {
       // 自定义模式：模型名是用户自己填的一串字，没有列表可拉。
-      // 就放当前这一个选项，能看见「现在用的是哪个」，改则去设置里改。
+      // 就放当前这一个选项，能看见「现在用的是哪个」；再挂一条「更换模型…」，
+      // 免得点开下拉只有孤零零一项、看起来像个坏掉的控件。
       const o = document.createElement('option');
       o.value = cur || '';
       o.textContent = cur || '未配置模型';
       sel.appendChild(o);
+      const go = document.createElement('option');
+      go.value = SETTINGS_OPTION;
+      go.textContent = '更换模型…';
+      sel.appendChild(go);
       sel.value = cur || '';
-      sel.title = `${cur ? `模型：${cur}` : '还没有配置模型'}\n自定义接口没有可拉取的列表，点「设置」改`;
+      sel.title = `${cur ? `模型：${cur}` : '还没有配置模型'}\n自定义接口没有可拉取的列表，点「更换模型…」去设置里改`;
     }
     sel.disabled = false;
   }
@@ -1410,6 +1419,12 @@ function bindComposer() {
 
   on('selModel', 'change', async (e) => {
     const v = e.target.value;
+    // 「更换模型…」不是真的选了一个模型，只是借下拉当一个去设置的入口
+    if (v === SETTINGS_OPTION) {
+      renderChannelControls(); // 先把选中的项恢复成当前模型
+      openSettings();
+      return;
+    }
     S.config = await api.saveConfig({ model: v });
     renderHeader();
     toast(v ? `模型：${v}` : '已跟随社区默认模型');
