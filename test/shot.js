@@ -472,17 +472,28 @@ function startAvatarServer() {
   //
   //    右键菜单是用 MouseEvent 手动派发的 —— Electron 里没有原生右键菜单，
   //    自动化也点不出系统菜单，只能把事件直接喂给页面，验证菜单真的弹出来了。
-  //    顺便报一下菜单的 top：它必须落在标题栏（拖拽区）下面，否则点它会变成拖窗口。
+  //
+  //    ⚠️ 菜单的尺寸/落点必须在**点击之前**读。
+  //    点击会（按设计）关掉菜单 —— 之前把读取写在点击之后，拿到的是一个已经
+  //    从 DOM 里摘掉的元素：getBoundingClientRect 全是 0、选择器也查不到子项，
+  //    看起来就像「菜单根本没弹出来」。这个坑值得写在这儿。
   step('10-copy', () =>
     shoot({ label: '10-copy', dataDir: freshDir(),
       script:
-        "(function(){var a=document.querySelector('.msg-assistant');var b=a.getBoundingClientRect();" +
+        "(async function(){" +
+        "var a=document.querySelector('.msg-assistant');var b=a.getBoundingClientRect();" +
         "a.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:Math.round(b.left)+60,clientY:Math.round(b.top)+12}));" +
+        // —— 先读菜单 ——
         "var m=document.querySelector('.ctx-menu');var tb=document.querySelector('.titlebar').offsetHeight;" +
+        "var mt=m?Math.round(m.getBoundingClientRect().top):-1;var mi=document.querySelectorAll('.ctx-menu .ctx-item').length;" +
+        // —— 再点复制按钮，验证事件委托接上了 ——
+        "var cbtn=a.querySelector('.msg-copy');var before=cbtn.textContent;" +
+        "cbtn.dispatchEvent(new MouseEvent('click',{bubbles:true}));" +
+        "await new Promise(function(r){setTimeout(r,400)});" +
         "return 'copy_btns='+document.querySelectorAll('.msg-copy').length" +
-        "+' menu_items='+document.querySelectorAll('.ctx-menu .ctx-item').length" +
+        "+' menu_items='+mi+' menu_top='+mt+' titlebar_h='+tb" +
         "+' user_select='+getComputedStyle(document.querySelector('.transcript')).userSelect" +
-        "+' menu_top='+Math.round(m.getBoundingClientRect().top)+' titlebar_h='+tb})()",
+        "+' click_before='+JSON.stringify(before)+' click_after='+JSON.stringify(cbtn.textContent)})()",
       delay: 1800,
     })
   );

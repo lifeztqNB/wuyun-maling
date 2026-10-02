@@ -742,32 +742,26 @@ function renderItem(item) {
   // 用户刚拖选的那一段会被打断，选了个寂寞。给一个点一下就好的按钮，
   // 是唯一不依赖选区存活时间的做法。
   if (item.type === 'user' || item.type === 'assistant') {
-    node.appendChild(buildCopyBtn(() => item.text || '', '复制这条消息'));
+    node.appendChild(buildCopyBtn(item));
   }
   return node;
 }
 
-/** 小复制按钮。getText 每次点击时才取，这样流式更新过的内容也拿得到最新值。 */
-function buildCopyBtn(getText, title) {
+/**
+ * 小复制按钮。
+ *
+ * ⚠️ 这里**只建节点、不绑事件** —— 事件统一在 `#transcript` 上委托。
+ * 原因：流式输出时这个气泡每帧都会被整块替换（updateItem → replaceChild）。
+ * 如果把 click 直接绑在按钮上，用户按下鼠标到松开之间节点刚好被换掉，
+ * 浏览器会把 click 派发到「最近的公共祖先」上，按钮的处理器根本不会跑 ——
+ * 表现就是「点了没反应」，而且只在输出中偶发，极难复现。
+ * 委托挂在不会变的容器上就没这个问题。
+ */
+function buildCopyBtn(item) {
   const b = el('button', 'msg-copy', '复制');
   b.type = 'button';
-  b.title = title || '复制';
-  b.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    const text = getText();
-    if (!text) {
-      toast('这条没有可复制的文本', true);
-      return;
-    }
-    const ok = await copyText(text);
-    b.textContent = ok ? '已复制' : '复制失败';
-    b.classList.toggle('bad', !ok);
-    if (!ok) toast('复制失败，可以选中后按 Ctrl+C', true);
-    setTimeout(() => {
-      b.textContent = '复制';
-      b.classList.remove('bad');
-    }, 1200);
-  });
+  b.dataset.copyItem = item.id;
+  b.title = item.type === 'user' ? '复制我的这条消息' : '复制码灵的这条回复';
   return b;
 }
 
@@ -1442,15 +1436,36 @@ function bindComposer() {
     S.autoScroll = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
   });
 
-  // 代码块的复制按钮（事件委托，因为卡片是动态生成的）
+  // 代码块 / 消息的复制按钮（事件委托，因为卡片是动态生成的，
+  // 而且消息节点在流式输出时会被整块替换 —— 见 buildCopyBtn 的说明）
   on('transcript', 'click', async (e) => {
-    const btn = e.target.closest('.codeblock-copy');
-    if (!btn) return;
-    const pre = btn.closest('.codeblock')?.querySelector('pre');
-    if (!pre) return;
-    const ok = await copyText(pre.textContent);
-    btn.textContent = ok ? '已复制' : '复制失败';
-    setTimeout(() => (btn.textContent = '复制'), 1200);
+    const codeBtn = e.target.closest('.codeblock-copy');
+    if (codeBtn) {
+      const pre = codeBtn.closest('.codeblock')?.querySelector('pre');
+      if (!pre) return;
+      const ok = await copyText(pre.textContent);
+      codeBtn.textContent = ok ? '已复制' : '复制失败';
+      setTimeout(() => (codeBtn.textContent = '复制'), 1200);
+      return;
+    }
+
+    const msgBtn = e.target.closest('.msg-copy');
+    if (!msgBtn) return;
+    // 每次点击时才从会话状态里取文本，这样流式更新过的内容也拿得到最新值
+    const item = (S.session?.items || []).find((i) => i.id === msgBtn.dataset.copyItem);
+    const text = item?.text || '';
+    if (!text) {
+      toast('这条没有可复制的文本', true);
+      return;
+    }
+    const ok = await copyText(text);
+    msgBtn.textContent = ok ? '已复制' : '复制失败';
+    msgBtn.classList.toggle('bad', !ok);
+    if (!ok) toast('复制失败，可以选中后按 Ctrl+C', true);
+    setTimeout(() => {
+      msgBtn.textContent = '复制';
+      msgBtn.classList.remove('bad');
+    }, 1200);
   });
 
   // 权限模式 / shell 快捷切换
