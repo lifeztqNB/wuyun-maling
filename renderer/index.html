@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<!--
+  img-src 里额外放了 file: —— 界面 logo 是本地图片（renderer/logo.png）。
+  在 file:// 页面下，'self' 对文件源不一定匹配得上，显式写 file: 更稳。
+  connect-src 仍然是 'none'：渲染进程一个网络请求都不许发，全部由主进程代劳。
+-->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: file:; font-src 'self'; connect-src 'none';">
+<title>雾韵码灵</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- 自绘标题栏：配合 titleBarOverlay，右侧 146px 留给系统的最小化/最大化/关闭 -->
+<header class="titlebar">
+  <div class="tb-brand">
+    <img class="tb-mark" src="logo-sm.png" alt="" draggable="false">
+    <span class="tb-name">雾韵码灵</span>
+  </div>
+  <div class="tb-mid">
+    <button class="tb-chip" id="btnWorkspaceTop" title="点击切换工作区">
+      <span class="tb-chip-ico">▸</span>
+      <span id="tbWorkspaceLabel">—</span>
+    </button>
+  </div>
+  <div class="tb-grip"></div>
+</header>
+
+<div class="shell">
+
+  <!-- ============ 左侧会话栏 ============ -->
+  <aside class="sidebar">
+    <div class="side-head">
+      <button class="btn-new" id="btnNew">
+        <span class="btn-new-ico">＋</span>
+        <span>新任务</span>
+        <kbd>Ctrl N</kbd>
+      </button>
+      <div class="side-search-wrap">
+        <input class="side-search" id="searchBox" type="text" placeholder="搜索任务" spellcheck="false">
+      </div>
+    </div>
+
+    <div class="side-list" id="sessionList"></div>
+
+    <div class="side-foot">
+      <!-- 账号入口：登录状态、额度都从这里进。点它开账号弹窗。 -->
+      <button class="side-acct" id="btnAccount">
+        <span class="acct-ava" id="acctAva">灵</span>
+        <span class="acct-txt">
+          <span class="acct-name" id="acctName">未登录</span>
+          <span class="acct-sub" id="acctSub">正在读取状态…</span>
+        </span>
+      </button>
+      <div class="side-foot-row">
+        <button class="side-btn" id="btnSettings">
+          <span class="side-btn-ico">⚙</span>
+          <span>设置</span>
+        </button>
+        <button class="side-btn side-btn-icon" id="btnAbout" title="关于">?</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============ 主区域 ============ -->
+  <main class="main">
+    <div class="runbar" id="runbar"></div>
+
+    <div class="main-head">
+      <div class="mh-title" id="taskTitle">新任务</div>
+      <div class="mh-right">
+        <!-- 月度额度条（Codex 风格：显示「还剩百分之多少」，不是「用了多少」）。
+             只在社区模式下出现；自定义接口走用户自己的账单，显示社区额度只会让人困惑。 -->
+        <button class="pill quota" id="pillQuota" hidden title="本月额度">
+          <span class="q-bar"><i id="quotaFill"></i></span>
+          <span id="quotaPct">100%</span>
+        </button>
+        <button class="pill" id="pillModel" title="点击打开设置">未配置模型</button>
+        <span class="pill pill-static" id="pillUsage"></span>
+      </div>
+    </div>
+
+    <div class="transcript" id="transcript"></div>
+
+    <div class="composer-wrap">
+      <div class="composer" id="composer">
+        <textarea id="input" rows="1" spellcheck="false"
+                  placeholder="想让码灵做什么？它会真的读写文件、执行命令…"></textarea>
+        <div class="composer-bar">
+          <div class="cb-left">
+            <button class="cb-chip" id="chipMode" title="权限模式">自动</button>
+            <button class="cb-chip" id="chipShell" title="执行命令用的 shell">PowerShell</button>
+            <button class="cb-chip cb-chip-ghost" id="chipStop" hidden>■ 停止</button>
+          </div>
+          <div class="cb-right">
+            <span class="cb-status" id="statusText"></span>
+            <button class="send-btn" id="btnSend" title="发送（Enter）">↑</button>
+          </div>
+        </div>
+      </div>
+      <div class="composer-hint" id="composerHint">
+        Enter 发送 · Shift+Enter 换行 · 运行中按 Esc 停止
+      </div>
+    </div>
+  </main>
+
+</div>
+
+<!-- ============ 登录页 ============
+     盖在标题栏之下的整屏遮罩。两条路：登录社区账号（开箱即用，走每月额度），
+     或者跳过登录自己填接口（走自己的账单）。
+     刻意不用 <form>：这个页面在 file:// 下，一旦 JS 出错表单会触发一次导航，
+     而主进程的 will-navigate 又会把它丢给系统浏览器，画面会很莫名其妙。 -->
+<div class="login" id="loginScreen" hidden>
+  <div class="login-box">
+    <img class="login-logo" src="logo.png" alt="" draggable="false">
+    <div class="login-name">雾韵码灵</div>
+    <div class="login-sub">跑在你电脑上的 AI 编程助手</div>
+
+    <div class="login-fields">
+      <label class="lf">
+        <span>社区账号</span>
+        <input id="loginAccount" type="text" placeholder="用户名 / 邮箱 / 昵称"
+               autocomplete="username" spellcheck="false">
+      </label>
+      <label class="lf">
+        <span>密码</span>
+        <input id="loginPassword" type="password" placeholder="登录密码" autocomplete="current-password">
+      </label>
+    </div>
+
+    <div class="login-err" id="loginErr" hidden></div>
+
+    <button class="login-btn" id="btnLogin">登录</button>
+    <button class="login-skip" id="btnSkip">跳过登录，自己配置接口</button>
+
+    <div class="login-note">
+      登录后每月自动获得免费额度，每月 1 日重置为 100%。<br>
+      密码不会被保存，登录凭证只存在本机。
+    </div>
+  </div>
+</div>
+
+<div class="modal-root" id="modalRoot"></div>
+<div class="toast-root" id="toastRoot"></div>
+
+<script src="markdown.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

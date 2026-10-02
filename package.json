@@ -1,0 +1,74 @@
+{
+  "name": "wuyun-maling",
+  "productName": "雾韵码灵",
+  "version": "0.1.0",
+  "description": "雾韵码灵 —— 跑在 Windows 本机的 AI 编程助手，能读写文件、执行命令，界面参照 Codex",
+  "author": {
+    "name": "雾韵社区"
+  },
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "assets": "node scripts/assets.js",
+    "prestart": "node scripts/assets.js",
+    "start": "electron .",
+    "predev": "node scripts/assets.js",
+    "dev": "electron . --dev",
+    "test": "node test/unit.js && node test/e2e.js",
+    "shot": "node test/shot.js",
+    "packaged": "node test/packaged.js",
+    "predist": "node scripts/assets.js",
+    "dist": "node scripts/dist.js --win",
+    "predist:dir": "node scripts/assets.js",
+    "dist:dir": "node scripts/dist.js --win --dir"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "top.wuyunsq.maling",
+    "productName": "雾韵码灵",
+    "copyright": "Copyright © 2026 雾韵社区",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "雾韵码灵",
+      "artifactName": "雾韵码灵-${version}-setup.${ext}"
+    },
+    "portable": {
+      "artifactName": "雾韵码灵-${version}-portable.${ext}"
+    }
+  }
+}

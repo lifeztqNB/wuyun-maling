@@ -1,0 +1,380 @@
+# 雾韵码灵
+
+> 跑在你自己电脑上的 AI 编程助手。它能**真的读写文件、真的执行命令**，并把每一步摊开给你看。
+> 界面参照 OpenAI Codex 的观感：深色、克制、把「机器做了什么」放在最显眼的位置。
+
+当前版本 **0.1.0**，优先支持 **Windows**（macOS / Linux 的技术栈已经打通，见文末）。
+
+---
+
+## 零、长什么样
+
+截图由 `node test/shot.js` 拉真窗口自动生成，不是手绘稿。
+（图片托管在项目自己的下载站上 —— 仓库只提交文本，二进制走不了接口，见 `assets/README.md`。）
+
+| | |
+| --- | --- |
+| ![登录](https://download.wuyunsq.top/wuyun-maling/agent-06-login.png) | ![空白状态](https://download.wuyunsq.top/wuyun-maling/agent-01-empty.png) |
+| 首次打开：登录社区账号，或者跳过登录自己配接口 | 刚打开：选个工作区就能开始 |
+| ![一次完整任务](https://download.wuyunsq.top/wuyun-maling/agent-02-conversation.png) | ![额度](https://download.wuyunsq.top/wuyun-maling/agent-07-quota.png) |
+| 一次完整任务：读文件 → 改文件（红绿 diff）→ 跑测试 | 每月额度条：还剩百分之多少、什么时候重置 |
+| ![危险命令确认](https://download.wuyunsq.top/wuyun-maling/agent-03-approval.png) | ![终端输出](https://download.wuyunsq.top/wuyun-maling/agent-05-terminal.png) |
+| `rm -rf` 这类命令会先拦下来问你 | 命令卡片展开后是完整的终端输出 + 退出码 + 耗时 |
+| ![自定义接口设置](https://download.wuyunsq.top/wuyun-maling/agent-04-settings.png) | ![社区模式设置](https://download.wuyunsq.top/wuyun-maling/agent-08-settings-community.png) |
+| 自定义接口：填地址 / Key / 模型，内置常见服务商 | 社区账号：模型列表由服务端下发，不用手填 |
+
+---
+
+## 一、快速开始
+
+### 方式 A：装好的 exe（推荐）
+
+到 [Releases](https://github.com/lifeztqNB/wuyun-maling/releases) 下载 `雾韵码灵-0.1.0-setup.exe`，
+双击安装。安装完从开始菜单启动即可，不需要装 Node.js。
+
+### 方式 B：从源码跑
+
+需要 **Node.js 18 或更高**。到 https://nodejs.org 下载 LTS 版，一路下一步即可。
+
+装完在命令行里确认一下：
+
+```
+node -v
+npm -v
+```
+
+然后双击目录里的 **`启动.cmd`**。第一次运行会自动装依赖（约 100 MB，需要联网，等一两分钟）。
+之后再双击就是秒开。> 也可以在命令行里 `npm start`，效果一样。
+
+### 第一次打开：两条路选一条
+
+| 方式 | 适合谁 | 要准备什么 |
+| --- | --- | --- |
+| **登录社区账号** | 想开箱即用 | 一个雾韵社区账号。**不用自己搞 API Key** |
+| **跳过登录** | 已有自己的模型接口 | 接口地址 + API Key + 模型名 |
+
+#### 走「登录社区账号」
+
+输入用户名（或邮箱 / 昵称）和密码即可。登录后：
+
+- 每个月自动获得一份**免费额度**，**每月 1 日重置为 100%**，不用手动领。
+- 顶部会出现一条**额度条**，显示本月**还剩百分之多少**（和 Codex 一个口径），
+  鼠标悬停能看具体金额和下次重置时间，点一下打开详情。
+- 可用模型由服务端下发，设置里直接选，不用手填。
+- **额度用完就停，不会去扣社区余额**，两者是完全独立的两套账。
+
+> 密码不会被保存，登录凭证只存在本机。要退出登录：点左下角账号卡片 → 退出登录。
+
+#### 走「跳过登录」
+
+点登录页下面的「跳过登录，自己配置接口」，然后填三样东西：
+
+| 项目 | 说明 |
+| --- | --- |
+| 接口地址 | 要带 `/v1`。任何「OpenAI 兼容」的端点都行 |
+| API Key | 你自己的密钥，只存在本机 |
+| 模型名 | **必须支持工具调用（function calling）**，否则它没法读写文件 |
+
+不知道填什么就点上面的「快速选择服务商」，常见的几家都预置好了：
+
+| 服务商 | 接口地址 | 推荐模型 |
+| --- | --- | --- |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
+| 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
+| Kimi | `https://api.moonshot.cn/v1` | `moonshot-v1-8k` |
+| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-flash` |
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
+| 本地 Ollama | `http://127.0.0.1:11434/v1` | `qwen2.5:7b` |
+
+填完点 **测试连接** —— 能拉到模型列表就说明通了。然后 **保存**。
+
+两种方式随时可以换：设置页顶部有一条「接入方式」横幅，点右边的按钮就能切过去。
+
+---
+
+## 二、怎么用
+
+1. 点左上角标题栏中间那条路径，选一个**工作区目录**（比如你的项目文件夹）。
+2. 在底部输入框里说清楚你要干什么，回车发送。
+3. 它会先读文件、再动手改、改完还会跑一遍测试，每一步都画成卡片给你看。
+
+比如可以这样说：
+
+- 「把 `src/utils/format.js` 里的日期格式化改成本地时区，然后跑一下测试」
+- 「把这个项目的目录结构梳理一遍，告诉我它是干什么的、入口在哪」
+- 「搜索所有 TODO 注释，挑一个最容易修的改掉，并说明你改了什么」
+
+### 界面上的东西
+
+- **左侧**：任务列表，按「今天 / 昨天 / 最近七天 / 更早」分组。鼠标悬停会出现删除按钮。
+- **左下角账号卡片**：显示当前是谁、额度还剩多少。点开是额度详情与退出登录。
+- **顶部右侧**：模型名胶囊 + **本月额度条**（社区模式下才有；自定义接口走自己的账单，
+  显示社区额度只会让人以为还能白嫖）。
+- **中间**：对话流。灰底气泡是你说的，其余都是它做的。
+- **工具卡片**：每次读文件、改文件、跑命令都会生成一张卡。
+  - 头部一行显示：工具名 · 目标 · 状态 · 改动量（`+3 −3`）
+  - 改文件会直接渲染**红绿 diff**
+  - 跑命令会显示**终端输出 + 退出码 + 耗时**
+  - 执行中自动展开，成功后自动收起（出错则保持展开，免得你没看见）
+- **底部输入框**：Enter 发送，Shift+Enter 换行，运行中按 Esc 停止。
+- 输入框左下角三个小胶囊分别是：**权限模式**、**命令解释器**、**停止**。点前两个可以循环切换。
+
+### 快捷键
+
+| 快捷键 | 作用 |
+| --- | --- |
+| `Ctrl + N` | 新任务 |
+| `Ctrl + ,` | 打开设置 |
+| `Ctrl + L` | 光标跳到输入框 |
+| `Enter` / `Shift + Enter` | 发送 / 换行 |
+| `Esc` | 关闭弹窗；没弹窗时停止当前任务 |
+
+---
+
+## 三、安全边界（建议先读这段）
+
+它跑在你自己的电脑上，能改你的文件、能执行命令。所以做了两层防护：
+
+### 第一层：工作区围栏（硬性的，任何模式下都不放开）
+
+**所有文件操作都被限制在你选的那个工作区目录里。** 路径在解析之后必须落在工作区内，
+否则直接拒绝执行。这一层连 `完全放行` 模式也绕不过去。
+
+具体来说：
+
+- `../../../etc/passwd` 这类往上跳的路径 → 拒绝
+- 工作区外的绝对路径（`D:\别人的东西`）→ 拒绝
+- 指向工作区外的**符号链接** → 也拒绝（会把软链接解开再判断）
+- 想删工作区根目录本身 → 拒绝
+
+### 第二层：危险命令确认（可调）
+
+三档模式，在设置里选，也可以点输入框左下角的胶囊快速切换：
+
+| 模式 | 行为 |
+| --- | --- |
+| **只读** | 只能读文件和搜索。写文件、改文件、跑命令这些工具**根本不会发给模型**，它想干也干不了 |
+| **自动**（默认） | 常规读写和命令直接执行；**危险操作弹卡片让你确认** |
+| **完全放行** | 全部直接执行，不再弹窗（工作区围栏依然生效） |
+
+「危险操作」包括：递归/强制删除、格式化磁盘、改注册表、改引导、关机重启、
+改账户权限、`git reset --hard`、`git push --force`、以及**从网络下载内容直接执行**
+（`iwr ... | iex`、`curl ... | sh`）这类最典型的攻击形态。
+
+弹出来的确认卡片有三个选项：**允许一次** / **本会话始终允许** / **拒绝**。
+选「始终允许」后，同一条命令本会话内不会再问。
+
+> ⚠️ **必须说清楚的一点**：危险命令识别是**特征匹配，不是沙箱**。
+> 它能拦住绝大多数常见的自毁操作，但拦不住刻意构造的绕过。
+> 如果要用它跑**来源不可信**的代码，请放在虚拟机或容器里。
+
+---
+
+## 四、它能用哪些工具
+
+| 工具 | 作用 | 需要确认 |
+| --- | --- | --- |
+| `read_file` | 读文件（带行号，可分段读大文件） | 否 |
+| `list_dir` | 列目录树（自动跳过 `node_modules`、`.git` 等） | 否 |
+| `search_files` | 按正则搜文件内容 | 否 |
+| `write_file` | 整篇写入（新建或覆盖，自动建父目录） | 否 |
+| `edit_file` | 精确替换（多处匹配时要求带更多上下文，防止误改） | 否 |
+| `delete_path` | 删除文件或目录 | **是** |
+| `run_command` | 执行命令（PowerShell / CMD / Bash） | 危险命令需要 |
+
+几个刻意的设计：
+
+- **改小改动优先用 `edit_file`**，而不是整篇重写。这样 diff 更小、也更容易看出改了什么。
+- **命令执行不会挂住**：关闭了 git 的凭据询问和分页器，stdin 直接给 EOF，
+  所以不会有「等输入」卡死的情况；超时会连子进程一起杀掉。
+- **输出有上限**：命令输出、文件读取、搜索结果都会截断（保留头尾），
+  免得一次 `npm install` 把上下文撑爆。
+
+---
+
+## 五、文件放在哪
+
+| 内容 | 位置 |
+| --- | --- |
+| 配置（含 API Key / 社区登录凭证） | `%APPDATA%\WuyunMaLing\config.json` |
+| 会话历史 | `%APPDATA%\WuyunMaLing\sessions.json` |
+| 窗口位置 | `%APPDATA%\WuyunMaLing\window.json` |
+
+> 数据目录刻意用了 ASCII 名字。展示名是「雾韵码灵」，但配置目录带中文的话，
+> 备份脚本、同步工具、命令行排查都容易踩编码的坑。
+> 菜单「文件 → 打开数据目录」可以直接跳过去。
+
+**自定义模式的 API Key、以及社区登录凭证，都只存在本机这个文件里**，不会上传到任何地方。
+（社区模式下发请求时，凭证是主进程拿去当 `Authorization` 用的；渲染进程从头到尾拿不到它 ——
+见 `preload.js` 里的说明。）
+
+想做成便携版（配置跟着程序走），启动时加 `--data-dir=某个目录` 即可。
+
+---
+
+## 六、开发
+
+### 目录结构
+
+```
+wuyun-maling/            （仓库根目录，本地是 wuyun-agent/）
+├── main.js               Electron 主进程：窗口、菜单、IPC、跑 Agent 循环
+├── preload.js            唯一的 IPC 桥（contextIsolation + sandbox 都开着）
+├── src/
+│   ├── agent.js          Agent 主循环 + 系统提示词
+│   ├── llm.js            OpenAI 兼容客户端（流式 SSE + function calling）
+│   ├── community.js      社区账号与额度接口客户端（登录 / 刷新额度 / 退出）
+│   ├── tools.js          七个工具的实现
+│   ├── safety.js         工作区围栏 + 危险命令识别
+│   ├── diff.js           行级 diff
+│   └── store.js          配置与会话持久化（双通道：community / custom）
+├── renderer/
+│   ├── index.html        界面骨架（含登录页）
+│   ├── style.css         Codex 风格深色主题
+│   ├── markdown.js       零依赖 Markdown 渲染
+│   └── app.js            界面逻辑
+├── assets/               图片资源的 base64 文本版（见 assets/README.md）
+├── build/
+│   ├── make-icon.py      从社区 logo 生成多尺寸 .ico / .png（可复现）
+│   └── icon.ico          打包图标（由 assets/ 还原，不入库）
+├── docs/                 界面截图（png 不入库，见 docs/README.md）
+├── .github/workflows/
+│   └── build.yml         推 main 自动打包 + 发 Release
+├── scripts/
+│   ├── assets.js         base64 文本 ⇄ 真图片（npm start / dist 前自动跑）
+│   └── dist.js           打包入口（设好国内镜像再调 electron-builder）
+├── test/
+│   ├── lib/shoot.js      拉真窗口截图（shot.js 与 packaged.js 共用）
+│   ├── unit.js           单元测试（围栏 / 危险命令 / diff / 工具）
+│   ├── e2e.js            端到端（假模型端点 + 真 Agent 循环）
+│   ├── ui.js             界面静态检查
+│   ├── shot.js           自动截图验收（开发版，8 张）
+│   └── packaged.js       打包产物冒烟测试（拉起 exe 截图 + 查 asar）
+└── 启动.cmd
+```
+
+### 跑测试
+
+```
+npm test              # 单元 + 端到端，共 90 多项
+node test/ui.js       # 界面静态检查（id 引用一致性等）
+node test/shot.js     # 拉真窗口截图到 ../_shots/
+npm run packaged      # 打包产物冒烟测试（需先 npm run dist）
+```
+
+截图脚本支持几个环境变量，改界面时很好用：
+
+```
+SHOT_ONLY=07-quota node test/shot.js    # 只跑其中一张（逗号分隔可多张）
+SHOT_VERBOSE=1     node test/shot.js    # 打印 SHOT_INFO / SHOT_SCRIPT_RESULT / SHOT_STATE
+SHOT_DEBUG=1       node test/shot.js    # 打印子进程的 spawn/exit/close 时间点
+```
+
+当前状态：**单元 72 项、端到端 21 项、界面静态检查全绿**，截图 8 张约 40 秒跑完。
+
+`test/e2e.js` 会起一个本地 HTTP 服务扮演 OpenAI 端点，按剧本返回 `tool_calls`，
+然后跑真实的 Agent 循环，验证文件真的被改了、命令真的跑了、审批真的拦住了 —— 不需要真 Key。
+
+### 打包成 exe
+
+```
+npm run dist          # 产出 dist/ 下的安装包（NSIS）与免安装版（portable）
+npm run dist:dir      # 只出 dist/win-unpacked，不生成安装包（快，调试用）
+npm run packaged      # 拉起打好的 exe 截两张图，顺便检查 asar 里文件齐不齐
+```
+
+打包用的是 electron-builder。三个坑已经处理掉了：
+
+- **国内下载构建依赖会卡住**。NSIS、winCodeSign、app-builder 默认从 GitHub 拉，
+  `scripts/dist.js` 在本地会把它们指向 npmmirror 镜像。
+- **但镜像只在本地用**。CI 的机器本来就在墙外，绕道 npmmirror 反而更慢，
+  所以 `scripts/dist.js` 判断到 `CI` 变量时保持官方源。
+- **图标是还原出来的**。`build/icon.ico` 不在仓库里（二进制传不上去），
+  `npm run dist` 的 pre 钩子会先从 `assets/icon.ico.b64` 还原它。
+
+> 只生成了安装包、没生成 portable，或者报「缺少 build/icon.ico」时，先跑 `npm run assets`。
+
+### 发布
+
+`.github/workflows/build.yml` 会在推送到 `main` 时自动构建 Windows 安装包，
+并把 `setup.exe` / `portable.exe` 挂到一个以当前版本号命名的 Release 上。
+换版本只需要改 `package.json` 的 `version` 再推一次；版本号没变时重复推，
+也只是把同名文件覆盖一遍，不会堆出一串 Release。
+
+> 为什么不在本地打好包再上传：GitHub 的接口只能提交文本，exe 传不上去。
+> 让 GitHub 自己构建，安装包直接生成在它自己的机器上，就绕开了这个限制。
+> 构建中间产物也会用 `actions/upload-artifact` 留一份，Release 那步万一挂了还能手动下载。
+
+### 加一个新工具
+
+1. 在 `src/tools.js` 的 `TOOL_SPECS` 里加一条声明（`mutating` / `danger` 要标对）。
+2. 写实现函数，在 `EXECUTORS` 里注册。
+3. 如果是危险操作，在 `src/safety.js` 的 `DANGER_RULES` 里补特征。
+4. 在 `test/unit.js` 里加用例。
+
+### 几个踩过的坑（留个记录）
+
+- **`ELECTRON_RUN_AS_NODE=1`**：环境里带这个变量时，Electron 会退化成普通 Node 跑，
+  主进程拿不到 `app` / `BrowserWindow`，报一个很难懂的错。`启动.cmd` 里已经清掉了。
+- **`titleBarOverlay` 会占右侧约 146px**，自绘标题栏必须留出这段，否则内容被系统按钮盖住。
+- **截图这件事比想象中难，一共踩了四个坑**（都写在 `test/shot.js` 和 `main.js` 的注释里）：
+  1. **别复用 `--data-dir`**。单实例锁是按 `userData` 路径加的，而截图模式是硬退的，
+     会留下陈旧锁；下一次用同一个目录启动就撞上它，进程从此卡住退不掉。
+     现象看着很像「跑过 `executeJavaScript` 就挂」，极易误判。现在截图模式不参与互斥，
+     且每张图一个全新数据目录。
+  2. **别用 `requestAnimationFrame` 等帧**。窗口一旦被系统判定为「被遮挡」，
+     rAF 回调永远不会触发，进程会卡死在截图之前 —— 图不写、也不退出。
+  3. **必须关掉后台节流**（`backgroundThrottling: false`）。同上，被判定遮挡时
+     Chromium 会停止出帧，于是 `capturePage()` 返回的是**一张旧图**：
+     DOM 里弹窗明明开着，截图里就是没有。这个坑最阴，因为图看着完全正常，
+     只是少了一块；而且时好时坏（截图窗口 1440x900 比屏幕 1366x728 大，很容易被判遮挡）。
+  4. **退出别用 `app.exit()`，也别用 `process.exit()`**。前者会启动一个走不完的关闭流程
+     （既不结束进程，还会把 Node 事件循环停掉，连 `setTimeout` 兜底都不触发）；
+     后者会走 C 的 `exit()` → atexit → Chromium 收尾，那条链约有一半概率卡住。
+     截图是一次性任务，直接 `process.kill(自己, 'SIGKILL')` 最省事。
+- **截图脚本要能自证**。`test/shot.js` 会在截图前删掉同名旧图（否则「子进程没跑起来」
+  会被上一轮的旧图冒充成成功），并且 `--shot-script` 的返回值、以及截图前的
+  `SHOT_STATE` 都会打出来 —— 只看 PNG 是分不出「DOM 回退了」和「抓到旧帧」的。
+- **查 asar 里有没有文件，要解析索引，不能在文件里搜路径**。asar 的索引是一棵嵌套
+  JSON 树（`{"renderer":{"files":{"app.js":{…}}}}`），完整路径 `renderer/app.js`
+  在文件里根本不连续，搜字符串会把「明明打进去了」报成缺失。
+  另外索引的「对齐后长度」和「真实长度」差一点，按前者截会多读一截，`JSON.parse` 直接报错。
+- **打包后一定要拉起来跑一次**。「开发能跑、打包白屏」的原因太多（文件没进 asar、
+  路径变成 asar 内路径、图标缺失），光看 `dist/` 里有个 exe 完全说明不了问题。
+  `test/packaged.js` 就是干这个的：拉起 exe 截图 + 检查 asar 关键文件。
+- **跨域链接上的 `download` 属性会被浏览器忽略**，下载得靠服务端 `Content-Disposition`。
+- **异步测试要串行跑**。并发跑时两个用例同时读写同一个文件会互相踩，
+  报出假失败 —— 测试一旦有假红，人就会开始无视它。
+- **界面静态检查要先剥注释**。`app.js` 的注释里就写着 `$('chipWorkspace')` 当反面教材，
+  检查器不剥注释就会把它当成真实引用而误报。
+- **并排的输入框必须各自带标签**。设置里「温度 / 最大步数」两个数字框并排摆着、
+  只在上面写一行总标题，用户得对着说明文字猜哪个是哪个。
+- **两种模式共用一个字段要留神**。`config.model` 是社区和自定义共用的，
+  用户以前在自定义模式下填过 `deepseek-chat`，登录社区后这个值还在 ——
+  直接透传会被网关判成「模型不存在」，用户只看到一个莫名其妙的报错。
+  现在 `resolveConnection()` 只认服务端下发过的模型名，登录时也会把不认识的名字清掉。
+- **PHP 闭包不继承外层作用域**。给流式路径的 `use (...)` 补新变量时漏了一个 `$selfName`，
+  结果**只有流式请求 500，非流式完全正常** —— 这种「一半好一半坏」的 bug 最容易测漏。
+
+---
+
+## 七、后面可以做什么
+
+- [x] 打包成 Windows 安装包（electron-builder）
+- [x] 社区账号登录 + 每月额度（额度与开放平台余额完全独立）
+- [ ] **macOS / Linux**：Electron 本身跨平台，主要工作是把 `启动.cmd` 换成 `.command` / `.desktop`，
+      并确认 shell 选择逻辑（已按 `process.platform` 分流，Windows 用 PowerShell，其余用 bash）。
+- [ ] 对话内检索与回滚（把某一步之后的内容丢掉重跑）
+- [ ] `@` 引用文件、`/` 触发命令的补全
+- [ ] 多工作区并行
+- [ ] 自动更新（electron-updater）
+
+---
+
+## 八、已知限制
+
+- 界面语言是中文，代码注释也是中文；没有做 i18n。
+- 危险命令识别是**特征匹配**，不是沙箱（见第三节的警告）。
+- 上下文超长时会从最早的一轮开始丢弃，被丢掉的内容不会回到对话里。
+- 只支持 OpenAI 的 `chat/completions` 协议；`/v1/responses` 那套还没接。
+- 暂不支持图片输入。

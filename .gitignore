@@ -1,0 +1,27 @@
+# 依赖
+node_modules/
+
+# 打包产物
+dist/
+
+# 由 assets/*.b64 还原出来的图片（是产物，不是源文件，见 assets/README.md）
+renderer/logo.png
+renderer/logo-sm.png
+build/icon.ico
+
+# make-icon.py 生成图标时的中间产物：.ico 由 assets/ 还原，这几个 png 只是副产物
+build/icon*.png
+
+# 界面截图。二进制，GitHub 的接口传不上去；
+# README 里的图挂在 download.wuyunsq.top（见 docs/README.md）。
+docs/*.png
+
+# 截图脚本的输出（默认落在仓库外层的 _shots/，这里兜一层）
+_shots/
+
+# 编辑器 / 系统垃圾
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log

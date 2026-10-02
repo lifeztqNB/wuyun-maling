@@ -1,0 +1,12 @@
+# 统一换行符：仓库里存 LF，检出到 Windows 时按需转换。
+# 不写这一条的话，不同人 clone 下来的文件 diff 会满屏都是行尾差异。
+* text=auto eol=lf
+
+# 批处理必须是 CRLF：cmd.exe 读 LF 结尾的 .cmd 会在某些语句上出错
+*.cmd text eol=crlf
+
+# 明确标成二进制，避免被当文本处理
+*.png binary
+*.ico binary
+*.exe binary
+*.7z binary

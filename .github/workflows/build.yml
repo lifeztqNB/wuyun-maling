@@ -1,0 +1,73 @@
+name: build
+
+# 推一次 main 就出一版 Windows 安装包，并挂到 Release 上。
+#
+# 版本号直接取 package.json 的 version：改完 version 再推，就是一个新 Release；
+# 没改 version 时重复推，也只是把同名文件覆盖一遍，不会堆出一串版本。
+#
+# 为什么不用本地打好的包往上发：GitHub 的接口只能提交文本，exe 传不上去。
+# 让 GitHub 自己构建，安装包就直接生成在它自己的机器上，绕开了这个问题。
+
+on:
+  push:
+    branches: [main]
+    # 只改文档不用重新打包
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+# 建 Release 要写权限。仓库默认给 GITHUB_TOKEN 的权限是只读，
+# 不显式打开的话最后一步会以 403 收场。
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 装依赖
+        run: npm ci
+
+      - name: 单元 + 端到端
+        run: npm test
+
+      - name: 界面静态检查
+        run: node test/ui.js
+
+      # npm run dist 的 pre 钩子会先把 assets/*.b64 还原成图标，
+      # 所以这里不需要额外的准备步骤。
+      - name: 打包
+        run: npm run dist
+
+      # 先存一份 workflow 产物：Release 那步万一挂了（权限、网络），
+      # 包还在，能手动下载。
+      - name: 存构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: wuyun-maling-windows
+          path: dist/*.exe
+          if-no-files-found: error
+
+      - name: 读版本号
+        id: ver
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: 发布 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: 雾韵码灵 v${{ steps.ver.outputs.version }}
+          files: dist/*.exe
+          generate_release_notes: true
