@@ -65,10 +65,10 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "雾韵码灵",
-      "artifactName": "雾韵码灵-${version}-setup.${ext}"
+      "artifactName": "wuyun-maling-${version}-setup.${ext}"
     },
     "portable": {
-      "artifactName": "雾韵码灵-${version}-portable.${ext}"
+      "artifactName": "wuyun-maling-${version}-portable.${ext}"
     }
   }
 }

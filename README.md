@@ -29,7 +29,7 @@
 
 ### 方式 A：装好的 exe（推荐）
 
-到 [Releases](https://github.com/lifeztqNB/wuyun-maling/releases) 下载 `雾韵码灵-0.1.0-setup.exe`，
+到 [Releases](https://github.com/lifeztqNB/wuyun-maling/releases) 下载 `wuyun-maling-0.1.0-setup.exe`，
 双击安装。安装完从开始菜单启动即可，不需要装 Node.js。
 
 ### 方式 B：从源码跑
@@ -283,7 +283,7 @@ npm run dist:dir      # 只出 dist/win-unpacked，不生成安装包（快，�
 npm run packaged      # 拉起打好的 exe 截两张图，顺便检查 asar 里文件齐不齐
 ```
 
-打包用的是 electron-builder。四个坑已经处理掉了：
+打包用的是 electron-builder。五个坑已经处理掉了：
 
 - **国内下载构建依赖会卡住**。NSIS、winCodeSign、app-builder 默认从 GitHub 拉，
   `scripts/dist.js` 在本地会把它们指向 npmmirror 镜像。
@@ -296,6 +296,10 @@ npm run packaged      # 拉起打好的 exe 截两张图，顺便检查 asar 里
   `GitHub Personal Access Token is not set` —— 看着像认证配错了，其实是它在做
   一件我们没让它做的事。`scripts/dist.js` 已经默认加上这个参数，发布交给
   workflow 里的 action 负责。
+- **安装包文件名只能用 ASCII**。构建本身能产出 `雾韵码灵-0.1.0-setup.exe`，
+  但 GitHub 的 Release 接口会把附件名里 `[a-zA-Z0-9._-]` 之外的字符**全部删掉**，
+  传上去就变成 `-0.1.0-setup.exe`。所以 `artifactName` 用 `wuyun-maling-…`；
+  应用名、快捷方式、程序本体仍然是中文。
 
 > 只生成了安装包、没生成 portable，或者报「缺少 build/icon.ico」时，先跑 `npm run assets`。
 
